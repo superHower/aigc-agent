@@ -171,6 +171,19 @@ class TaskStore:
                     return row
             return None
 
+    def get_done_output_paths(self, output_names: list[str]) -> dict[str, Path]:
+        if not output_names:
+            return {}
+        result: dict[str, Path] = {}
+        with self._connect() as connection:
+            rows = connection.execute("SELECT output_path FROM jobs WHERE status = 'done' AND output_path != ''").fetchall()
+        wanted = set(output_names)
+        for row in rows:
+            path = Path(row["output_path"])
+            if path.name in wanted:
+                result[path.name] = path
+        return result
+
     def get_jobs(self, task_id: str) -> list[sqlite3.Row]:
         with self._connect() as connection:
             return connection.execute(

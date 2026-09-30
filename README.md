@@ -81,3 +81,13 @@ curl -X POST http://localhost:8000/api/edit/advanced \
 ```
 
 高级编辑仍然是异步 Task/Job，使用 `GET /api/task/{task_id}` 查询结果。背景分割模型首次运行会下载本地模型文件；Logo、背景和主体编辑只在后端完成验证，前端工作台将在后续阶段接入。
+
+## 第六阶段长图拼接
+
+`POST /api/composite` 接受已上传的 `file_id` 或已完成 Job 的输出文件名，按 `image_ids` 顺序纵向拼接，支持 `width`、`gap`、`background_color`、`padding_top` 和 `padding_bottom`。图片等比缩放到目标宽度，结果登记为新的 `file_id`，可通过 `GET /api/files/{file_id}` 下载。
+
+```bash
+curl -X POST http://localhost:8000/api/composite \
+  -H 'Content-Type: application/json' \
+  -d '{"image_ids":["src_a","src_b"],"width":750,"gap":0,"background_color":"#FFFFFF","padding_top":20,"padding_bottom":20}'
+```

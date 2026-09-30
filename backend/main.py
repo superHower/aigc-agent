@@ -28,6 +28,8 @@ from backend.models.schemas import (
     UploadResponse,
     PromptPreviewRequest,
     PromptPreviewResponse,
+    CompositeRequest,
+    CompositeResponse,
 )
 from backend.services.file_storage import save_source, validate_image_bytes
 from backend.services.image_editor import ImageEditor
@@ -37,6 +39,7 @@ from backend.services.analyzer import Analyzer
 from backend.services.ocr_service import OCRService
 from backend.services.prompt_builder import PromptContext, PromptType, build_prompt
 from backend.services.mask_generator import create_background_mask, create_mask
+from backend.services.compositor import CompositeError, compose_images
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -296,6 +299,52 @@ async def prompt_preview(payload: PromptPreviewRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PromptPreviewResponse(prompt_type=payload.prompt_type, prompt=prompt)
+
+
+@app.post("/api/composite", response_model=CompositeResponse)
+async def composite(payload: CompositeRequest, request: Request):
+    current = state(request)
+    paths: list[Path] = []
+    output_names = [image_id for image_id in payload.image_ids if "." in image_id]
+    output_paths = current.store.get_done_output_paths(output_names)
+    for image_id in payload.image_ids:
+        record = current.store.get_file(image_id)
+        if record is not None:
+            paths.append(Path(record["path"]))
+            continue
+        output_path = output_paths.get(image_id)
+        if output_path is None:
+            job = current.store.get_job_by_output_name(image_id)
+            output_path = Path(job["output_path"]) if job and job["output_path"] else None
+        if output_path is None:
+            raise HTTPException(status_code=404, detail=f"image not found: {image_id}")
+        paths.append(output_path)
+    file_id = f"composite_{uuid4().hex}"
+    output_path = current.settings.data_dir / "composite" / f"{file_id}.png"
+    try:
+        width, height = await asyncio.to_thread(
+            compose_images,
+            paths,
+            output_path,
+            width=payload.width,
+            gap=payload.gap,
+            background_color=payload.background_color,
+            padding_top=payload.padding_top,
+            padding_bottom=payload.padding_bottom,
+        )
+    except CompositeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    current.store.register_file({
+        "id": file_id,
+        "original_name": f"{file_id}.png",
+        "path": str(output_path),
+        "mime_type": "image/png",
+        "width": width,
+        "height": height,
+        "size": output_path.stat().st_size,
+        "created_at": utc_now(),
+    })
+    return CompositeResponse(file_id=file_id, url=f"/api/files/{file_id}", width=width, height=height, image_count=len(paths))
 
 
 def task_view(request: Request, task_id: str) -> TaskView:

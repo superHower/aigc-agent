@@ -170,6 +170,23 @@ class PromptPreviewResponse(BaseModel):
     prompt: str
 
 
+class CompositeRequest(BaseModel):
+    image_ids: list[str] = Field(min_length=1, max_length=50)
+    width: int = Field(default=750, ge=1, le=10000)
+    gap: int = Field(default=0, ge=0, le=5000)
+    background_color: str = "#FFFFFF"
+    padding_top: int = Field(default=0, ge=0, le=10000)
+    padding_bottom: int = Field(default=0, ge=0, le=10000)
+
+
+class CompositeResponse(BaseModel):
+    file_id: str
+    url: str
+    width: int
+    height: int
+    image_count: int
+
+
 class RetryRequest(BaseModel):
     job_id: str | None = None
     source_id: str | None = None
