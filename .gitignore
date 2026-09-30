@@ -9,3 +9,5 @@ backend/data/*.db
 .DS_Store
 img
 media
+/frontend/node_modules/
+node_modules/
