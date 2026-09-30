@@ -30,6 +30,7 @@ from backend.models.schemas import (
     PromptPreviewResponse,
     CompositeRequest,
     CompositeResponse,
+    RetryRequest,
 )
 from backend.services.file_storage import save_source, validate_image_bytes
 from backend.services.image_editor import ImageEditor
@@ -393,6 +394,28 @@ def task_view(request: Request, task_id: str) -> TaskView:
 @app.get("/api/task/{task_id}", response_model=TaskView)
 async def get_task(task_id: str, request: Request):
     return task_view(request, task_id)
+
+
+@app.get("/api/tasks")
+async def list_tasks(request: Request, limit: int = 50, offset: int = 0):
+    current = state(request)
+    if limit < 1 or limit > 100 or offset < 0:
+        raise HTTPException(status_code=422, detail="invalid pagination")
+    items = []
+    for task in current.store.list_tasks(limit=limit, offset=offset):
+        view = task_view(request, task["id"])
+        items.append(view.model_dump(mode="json"))
+    return {"items": items, "limit": limit, "offset": offset}
+
+
+@app.post("/api/task/{task_id}/retry")
+async def retry_task(task_id: str, payload: RetryRequest, request: Request):
+    current = state(request)
+    try:
+        await current.manager.retry(task_id, payload.job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"task_id": task_id, "status": "queued"}
 
 
 @app.post("/api/task/{task_id}/cancel", response_model=CancelResponse)

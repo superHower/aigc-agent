@@ -160,6 +160,13 @@ class TaskStore:
         with self._connect() as connection:
             return connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
 
+    def list_tasks(self, limit: int = 50, offset: int = 0) -> list[sqlite3.Row]:
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+
     def get_job(self, job_id: str) -> sqlite3.Row | None:
         with self._connect() as connection:
             return connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -211,6 +218,13 @@ class TaskStore:
             except Exception:
                 connection.execute("ROLLBACK")
                 raise
+
+    def reset_task_for_retry(self, task_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE tasks SET status = 'queued', error = NULL, updated_at = ? WHERE id = ?",
+                (utc_now(), task_id),
+            )
 
     def set_task_status(self, task_id: str, status: str, error: str | None = None) -> None:
         with self._connect() as connection:

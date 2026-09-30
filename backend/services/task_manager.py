@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from uuid import uuid4
@@ -134,6 +135,29 @@ class TaskManager:
 
     def cancel(self, task_id: str) -> tuple[int, int]:
         return self.store.request_cancel(task_id)
+
+    async def retry(self, task_id: str, job_id: str | None = None) -> None:
+        task = self.store.get_task(task_id)
+        if task is None:
+            raise ValueError("task not found")
+        jobs = self.store.get_jobs(task_id)
+        selected = [job for job in jobs if job_id is None or job["id"] == job_id]
+        if not selected:
+            raise ValueError("job not found")
+        if any(job["status"] in {"pending", "processing"} for job in selected):
+            raise ValueError("job is already running")
+        for job in selected:
+            self.store.update_job(job["id"], status="pending", error=None, cancel_requested=0)
+        rule = json.loads(task["edit_rule"])
+        source_jobs: dict[str, list[dict[str, str]]] = {}
+        for job in jobs:
+            if job["status"] == "done" and job["id"] not in {item["id"] for item in selected}:
+                continue
+            source_jobs.setdefault(job["source_id"], []).append(dict(job))
+        self.store.reset_task_for_retry(task_id)
+        worker = asyncio.create_task(self._run_batch(task_id, source_jobs, rule))
+        self.running_tasks[task_id] = worker
+        worker.add_done_callback(lambda _: self.running_tasks.pop(task_id, None))
 
     async def create_batch(self, task_id: str, source_jobs: dict[str, list[dict[str, str]]], rule: dict) -> None:
         worker = asyncio.create_task(self._run_batch(task_id, source_jobs, rule))
