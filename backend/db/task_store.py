@@ -37,6 +37,12 @@ class TaskStore:
                     size INTEGER NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS analyses (
+                    file_id TEXT PRIMARY KEY,
+                    result TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (file_id) REFERENCES files(id)
+                );
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY,
                     created_at TEXT NOT NULL,
@@ -89,6 +95,21 @@ class TaskStore:
                     record["created_at"],
                 ),
             )
+
+    def get_analysis(self, file_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT result FROM analyses WHERE file_id = ?", (file_id,)).fetchone()
+            return row["result"] if row else None
+
+    def save_analysis(self, file_id: str, result: str, files: list[dict[str, Any]]) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for record in files:
+                connection.execute(
+                    "INSERT INTO files (id, original_name, path, mime_type, width, height, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    tuple(record[key] for key in ("id", "original_name", "path", "mime_type", "width", "height", "size", "created_at")),
+                )
+            connection.execute("INSERT INTO analyses (file_id, result, created_at) VALUES (?, ?, ?)", (file_id, result, utc_now()))
 
     def get_file(self, file_id: str) -> sqlite3.Row | None:
         with self._connect() as connection:

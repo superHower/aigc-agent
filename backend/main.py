@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,6 +15,8 @@ from openai import AsyncOpenAI
 from backend.config import Settings
 from backend.db.task_store import TaskStore, utc_now
 from backend.models.schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
     CancelResponse,
     CreateTaskRequest,
     HealthResponse,
@@ -26,6 +29,8 @@ from backend.services.file_storage import save_source, validate_image_bytes
 from backend.services.image_editor import ImageEditor
 from backend.services.model_registry import ModelRegistry
 from backend.services.task_manager import TaskManager
+from backend.services.analyzer import Analyzer
+from backend.services.ocr_service import OCRService
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -64,6 +69,7 @@ async def lifespan(app: FastAPI):
     app.state.store = store
     app.state.registry = registry
     app.state.manager = manager
+    app.state.analyzer = Analyzer(store, settings.data_dir, OCRService())
     try:
         yield
     finally:
@@ -159,6 +165,15 @@ async def create_task(payload: CreateTaskRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"task_id": task_id, "status": "queued", "total_jobs": 1}
+
+
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+async def analyze(payload: AnalyzeRequest, request: Request):
+    current = state(request)
+    results = []
+    for file_id in payload.file_ids:
+        results.append(await asyncio.to_thread(current.analyzer.analyze, file_id))
+    return AnalyzeResponse(files=results)
 
 
 def task_view(request: Request, task_id: str) -> TaskView:

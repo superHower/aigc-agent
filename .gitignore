@@ -7,4 +7,5 @@ __pycache__/
 backend/media/
 backend/data/*.db
 .DS_Store
-
+img
+media

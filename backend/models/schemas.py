@@ -27,6 +27,33 @@ class UploadResponse(BaseModel):
     files: list[UploadFileInfo] = Field(default_factory=list)
 
 
+class AnalyzeRequest(BaseModel):
+    file_ids: list[str] = Field(min_length=1, max_length=16)
+
+
+class TextBlockView(BaseModel):
+    id: str
+    bbox: tuple[int, int, int, int]
+    position: str
+    original: str
+    confidence: float | None = None
+    mask_url: str
+
+
+class AnalyzeFileResult(BaseModel):
+    file_id: str
+    width: int
+    height: int
+    thumbnail_url: str | None = None
+    logo_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    text_blocks: list[TextBlockView] = Field(default_factory=list)
+    error: str | None = None
+
+
+class AnalyzeResponse(BaseModel):
+    files: list[AnalyzeFileResult] = Field(default_factory=list)
+
+
 class CreateTaskRequest(BaseModel):
     file_id: str
     mask: MaskRect
@@ -107,4 +134,3 @@ class HealthResponse(BaseModel):
     models: dict[str, Any]
     capabilities: dict[str, str]
     database: str
-
