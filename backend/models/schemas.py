@@ -93,6 +93,23 @@ class CreateTaskRequest(BaseModel):
         return value
 
 
+class AdvancedEditRequest(BaseModel):
+    source_id: str
+    edit_type: Literal["logo", "background", "shade", "bulb"]
+    mask: MaskRect | None = None
+    reference_file_id: str | None = None
+    background: str = ""
+    subject: str = "product"
+    target: str = "target component"
+    color: str = ""
+    bulb: str = ""
+    brand: str = ""
+    position: str = "center"
+    size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "auto"
+    quality: Literal["low", "medium", "high", "xhigh", "max", "auto"] = "high"
+    output_format: Literal["png", "jpeg", "webp"] = "png"
+
+
 class BatchEditRule(BaseModel):
     model_config = {"extra": "forbid"}
     text_replace_enabled: bool = True

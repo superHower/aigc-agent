@@ -27,6 +27,7 @@ class ImageEditor:
         job_id: str,
         input_path: Path,
         mask_path: Path,
+        reference_path: Path | None = None,
         prompt: str,
         size: str,
         quality: str,
@@ -43,6 +44,7 @@ class ImageEditor:
             "input_sha256": hashlib.sha256(input_bytes).hexdigest(),
             "mask_path": str(mask_path),
             "mask_sha256": hashlib.sha256(mask_bytes).hexdigest(),
+            "reference_path": str(reference_path) if reference_path else None,
             "prompt": prompt,
             "model": model,
             "size": size,
@@ -55,9 +57,13 @@ class ImageEditor:
         snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
         with input_path.open("rb") as image_file, mask_path.open("rb") as mask_file:
+            image_inputs = [image_file]
+            reference_file = reference_path.open("rb") if reference_path else None
+            if reference_file:
+                image_inputs.append(reference_file)
             result = await self.client.images.edit(
                 model=model,
-                image=image_file,
+                image=image_inputs,
                 mask=mask_file,
                 prompt=prompt,
                 size=size,
@@ -66,6 +72,8 @@ class ImageEditor:
                 n=1,
                 timeout=request_timeout,
             )
+            if reference_file:
+                reference_file.close()
 
         if not result.data:
             raise RuntimeError("image edit returned no output")
@@ -87,4 +95,3 @@ class ImageEditor:
         )
         snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         return output_path, snapshot
-

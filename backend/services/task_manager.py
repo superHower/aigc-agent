@@ -36,11 +36,14 @@ class TaskManager:
         size: str,
         quality: str,
         output_format: str,
+        reference_path: Path | None = None,
+        mask_path: Path | None = None,
     ) -> str:
         task_id = f"task_{uuid4().hex}"
         job_id = f"{task_id}_{source_id}_edit_none"
-        mask_path = self.data_dir / "masks" / f"{job_id}.png"
-        create_mask(width, height, bbox, mask_path)
+        mask_path = mask_path or self.data_dir / "masks" / f"{job_id}.png"
+        if not mask_path.exists():
+            create_mask(width, height, bbox, mask_path)
         self.store.create_task(
             task_id,
             source_id,
@@ -59,8 +62,8 @@ class TaskManager:
             },
         )
         worker = asyncio.create_task(
-            self._run_single_job(
-                task_id, job_id, source_path, mask_path, prompt, size, quality, output_format
+                self._run_single_job(
+                task_id, job_id, source_path, mask_path, prompt, size, quality, output_format, reference_path
             )
         )
         self.running_tasks[task_id] = worker
@@ -77,6 +80,7 @@ class TaskManager:
         size: str,
         quality: str,
         output_format: str,
+        reference_path: Path | None = None,
     ) -> None:
         self.store.set_task_status(task_id, "running")
         for attempt in range(self.max_retries + 1):
@@ -99,6 +103,7 @@ class TaskManager:
                         size=size,
                         quality=quality,
                         output_format=output_format,
+                        reference_path=reference_path,
                         request_timeout=self.request_timeout,
                         ),
                         timeout=self.job_timeout,
@@ -182,6 +187,7 @@ class TaskManager:
                         job_id=job_data["id"], input_path=input_path, mask_path=mask_path,
                         prompt=job_data["prompt"], size=rule["size"], quality=rule["quality"],
                         output_format=rule["output_format"], request_timeout=self.request_timeout,
+                        reference_path=Path(job_data["reference_path"]) if job_data.get("reference_path") else None,
                     ), timeout=self.job_timeout)
                 job = self.store.get_job(job_data["id"])
                 if job and job["cancel_requested"]:

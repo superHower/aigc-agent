@@ -35,3 +35,20 @@ def create_mask(
             raise ValueError("generated mask has invalid dimensions or mode")
     return path
 
+
+def create_background_mask(input_path: Path, path: Path) -> Path:
+    try:
+        from rembg import remove
+    except ImportError as exc:
+        raise RuntimeError("background editing requires rembg; install the stage-five dependencies") from exc
+    with Image.open(input_path).convert("RGBA") as source:
+        foreground = remove(source)
+        alpha = foreground.getchannel("A")
+        mask = Image.new("RGBA", source.size, (0, 0, 0, 255))
+        mask.putalpha(alpha.point(lambda value: 0 if value < 128 else 255))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mask.save(path, "PNG", optimize=True)
+    if path.stat().st_size > MAX_MASK_BYTES:
+        path.unlink(missing_ok=True)
+        raise ValueError("generated background mask exceeds the 4 MB limit")
+    return path

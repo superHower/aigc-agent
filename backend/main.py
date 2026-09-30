@@ -17,6 +17,7 @@ from backend.db.task_store import TaskStore, utc_now
 from backend.models.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    AdvancedEditRequest,
     BatchRequest,
     CancelResponse,
     CreateTaskRequest,
@@ -35,6 +36,7 @@ from backend.services.task_manager import TaskManager
 from backend.services.analyzer import Analyzer
 from backend.services.ocr_service import OCRService
 from backend.services.prompt_builder import PromptContext, PromptType, build_prompt
+from backend.services.mask_generator import create_background_mask, create_mask
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -170,6 +172,45 @@ async def create_task(payload: CreateTaskRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"task_id": task_id, "status": "queued", "total_jobs": 1}
+
+
+@app.post("/api/edit/advanced")
+async def advanced_edit(payload: AdvancedEditRequest, request: Request):
+    current = state(request)
+    source = current.store.get_file(payload.source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source file not found")
+    reference = None
+    if payload.edit_type == "logo":
+        if not payload.reference_file_id:
+            raise HTTPException(status_code=422, detail="reference_file_id is required for logo editing")
+        reference = current.store.get_file(payload.reference_file_id)
+        if reference is None:
+            raise HTTPException(status_code=404, detail="reference file not found")
+    try:
+        if payload.edit_type == "background":
+            mask_path = current.settings.data_dir / "masks" / f"background_{uuid4().hex}.png"
+            create_background_mask(Path(source["path"]), mask_path)
+            prompt_context = PromptContext(prompt_type=PromptType.BACKGROUND, background=payload.background, subject=payload.subject)
+        else:
+            if payload.mask is None:
+                raise ValueError("mask is required for this edit type")
+            mask_path = current.settings.data_dir / "masks" / f"{payload.edit_type}_{uuid4().hex}.png"
+            create_mask(source["width"], source["height"], (payload.mask.x1, payload.mask.y1, payload.mask.x2, payload.mask.y2), mask_path)
+            prompt_context = PromptContext(
+                prompt_type=PromptType(payload.edit_type), target=payload.target,
+                color=payload.color, bulb=payload.bulb, brand=payload.brand, position=payload.position,
+            )
+        prompt = build_prompt(prompt_context)
+        task_id = await current.manager.create_single_job(
+            source_id=payload.source_id, source_path=Path(source["path"]), width=source["width"], height=source["height"],
+            bbox=(0, 0, source["width"], source["height"]), prompt=prompt, size=payload.size,
+            quality=payload.quality, output_format=payload.output_format, reference_path=Path(reference["path"]) if reference else None,
+            mask_path=mask_path,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"task_id": task_id, "status": "queued", "edit_type": payload.edit_type}
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)

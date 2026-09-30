@@ -67,3 +67,17 @@ curl -X POST http://localhost:8000/api/task/task_xxx/cancel
 ## Prompt 模板
 
 第四阶段将 Prompt 统一收敛到 `backend/services/prompt_builder.py`，支持 `background`、`shade`、`bulb`、`text` 和 `logo` 五类模板。批量文字替换强制携带原文、替换文案和九宫格位置；实际调用的完整 Prompt 会随 Job 输入快照保存。`POST /api/prompt/preview` 可在提交任务前预览模板渲染结果。
+
+## 第五阶段高级编辑
+
+`POST /api/edit/advanced` 支持 `logo`、`background`、`shade` 和 `bulb` 四类单步编辑。Logo 编辑需要 `reference_file_id`，后端会把原图和 Logo 参考图作为两张输入图提交；背景编辑使用 `rembg` 生成主体保护 Mask；换色和组件替换使用请求中的矩形 Mask。
+
+示例：
+
+```bash
+curl -X POST http://localhost:8000/api/edit/advanced \
+  -H 'Content-Type: application/json' \
+  -d '{"source_id":"src_xxx","edit_type":"background","background":"a clean white studio background","subject":"the waist bag"}'
+```
+
+高级编辑仍然是异步 Task/Job，使用 `GET /api/task/{task_id}` 查询结果。背景分割模型首次运行会下载本地模型文件；Logo、背景和主体编辑只在后端完成验证，前端工作台将在后续阶段接入。
