@@ -1,0 +1,10 @@
+.env
+*.key
+secrets/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/media/
+backend/data/*.db
+.DS_Store
+
