@@ -17,6 +17,7 @@ from backend.db.task_store import TaskStore, utc_now
 from backend.models.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    BatchRequest,
     CancelResponse,
     CreateTaskRequest,
     HealthResponse,
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
         settings.request_timeout,
         settings.job_timeout,
         settings.max_retries,
+        settings.max_concurrency,
     )
     app.state.settings = settings
     app.state.store = store
@@ -176,6 +178,60 @@ async def analyze(payload: AnalyzeRequest, request: Request):
     return AnalyzeResponse(files=results)
 
 
+@app.post("/api/generate/batch")
+async def generate_batch(payload: BatchRequest, request: Request):
+    current = state(request)
+    sources = current.store.get_files(payload.source_ids)
+    missing = [file_id for file_id in payload.source_ids if file_id not in sources]
+    if missing:
+        raise HTTPException(status_code=404, detail={"missing_file_ids": missing})
+
+    jobs: list[dict[str, str]] = []
+    source_jobs: dict[str, list[dict[str, str]]] = {}
+    for source_id in payload.source_ids:
+        source = sources[source_id]
+        analysis_json = current.store.get_analysis(source_id)
+        if not analysis_json:
+            raise HTTPException(status_code=409, detail=f"analyze source before generation: {source_id}")
+        analysis = AnalyzeResponse.model_validate_json('{"files":[' + analysis_json + ']}').files[0]
+        overrides = payload.per_source_overrides.get(source_id, {})
+        replacements = {item.id: item for item in overrides.text_blocks}
+        source_job_list: list[dict[str, str]] = []
+        for block in analysis.text_blocks:
+            replacement = replacements.get(block.id)
+            if not replacement or not replacement.enabled or not replacement.replace.strip() or replacement.replace.strip() == block.original.strip():
+                continue
+            mask_id = block.mask_url.rsplit("/", 1)[-1]
+            mask_record = current.store.get_file(mask_id)
+            if mask_record is None:
+                raise HTTPException(status_code=500, detail=f"mask not found: {mask_id}")
+            job_id = f"batch_{uuid4().hex}_{source_id}_text_{block.id}"
+            prompt = (
+                f'Replace the text "{block.original}" located in the {block.position} area with "{replacement.replace}". '
+                "Match the original font style, weight, color, size, perspective, and shadow exactly. "
+                "Do not alter any other text, graphics, product, or background. Output a photorealistic e-commerce product image."
+            )
+            job = {
+                "id": job_id,
+                "source_id": source_id,
+                "step": f"text_{block.id}",
+                "target_id": block.id,
+                "prompt": prompt,
+                "mask_path": mask_record["path"],
+                "input_path": source["path"],
+            }
+            jobs.append(job)
+            source_job_list.append(job)
+        source_jobs[source_id] = source_job_list
+
+    if not jobs:
+        raise HTTPException(status_code=422, detail="no enabled text replacements were provided")
+    task_id = f"task_{uuid4().hex}"
+    current.store.create_batch(task_id, payload.source_ids, payload.edit_rule.model_dump(), jobs)
+    await current.manager.create_batch(task_id, source_jobs, payload.edit_rule.model_dump())
+    return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "source_count": len(source_jobs)}
+
+
 def task_view(request: Request, task_id: str) -> TaskView:
     current = state(request)
     task = current.store.get_task(task_id)
@@ -192,19 +248,30 @@ def task_view(request: Request, task_id: str) -> TaskView:
         views.append(
             JobView(
                 id=job["id"], task_id=job["task_id"], source_id=job["source_id"],
-                step=job["step"], status=job["status"], retry_count=job["retry_count"],
+                step=job["step"], target_id=job["target_id"], status=job["status"], retry_count=job["retry_count"],
                 cancel_requested=bool(job["cancel_requested"]), input_path=job["input_path"],
                 output_path=job["output_path"], output_url=output_url, error=job["error"],
                 created_at=job["created_at"], updated_at=job["updated_at"],
             )
         )
+    terminal_jobs = sum(job.status in {"done", "failed", "cancelled"} for job in views)
+    sources = []
+    for source_id in sorted({job.source_id for job in views}):
+        source_jobs = [job for job in views if job.source_id == source_id]
+        sources.append({
+            "source_id": source_id,
+            "status": "completed" if all(job.status == "done" for job in source_jobs) else "failed" if any(job.status == "failed" for job in source_jobs) else "cancelled" if all(job.status == "cancelled" for job in source_jobs) else "running",
+            "total_jobs": len(source_jobs),
+            "completed_jobs": sum(job.status == "done" for job in source_jobs),
+        })
     return TaskView(
         id=task["id"], status=task["status"], created_at=task["created_at"],
         updated_at=task["updated_at"], total_jobs=len(jobs),
         completed_jobs=sum(job.status == "done" for job in views),
         failed_jobs=sum(job.status == "failed" for job in views),
         cancelled_jobs=sum(job.status == "cancelled" for job in views),
-        jobs=views, error=task["error"],
+        progress=terminal_jobs / len(views) if views else 0,
+        sources=sources, jobs=views, error=task["error"],
     )
 
 

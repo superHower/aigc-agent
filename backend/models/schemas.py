@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -93,11 +93,59 @@ class CreateTaskRequest(BaseModel):
         return value
 
 
+class BatchEditRule(BaseModel):
+    model_config = {"extra": "forbid"}
+    text_replace_enabled: bool = True
+    logo_replace_enabled: bool = False
+    background_replace_enabled: bool = False
+    background_prompt: str = ""
+    shade_color_enabled: bool = False
+    shade_color: str = ""
+    bulb_replace_enabled: bool = False
+    bulb_prompt: str = ""
+    size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "auto"
+    quality: Literal["low", "medium", "high", "xhigh", "max", "auto"] = "high"
+    output_format: Literal["png", "jpeg", "webp"] = "png"
+    strategy: Literal["serial"] = "serial"
+
+
+class TextReplacement(BaseModel):
+    model_config = {"extra": "forbid"}
+    id: str
+    replace: str = Field(default="", max_length=1000)
+    enabled: bool = True
+
+
+class SourceOverrides(BaseModel):
+    model_config = {"extra": "forbid"}
+    text_blocks: list[TextReplacement] = Field(default_factory=list)
+
+
+class BatchRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    source_ids: list[str] = Field(min_length=1, max_length=5)
+    edit_rule: BatchEditRule = Field(default_factory=BatchEditRule)
+    per_source_overrides: dict[str, SourceOverrides] = Field(default_factory=dict)
+
+    @field_validator("source_ids")
+    @classmethod
+    def unique_sources(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("source_ids must be unique")
+        return value
+
+
+class RetryRequest(BaseModel):
+    job_id: str | None = None
+    source_id: str | None = None
+
+
 class JobView(BaseModel):
     id: str
     task_id: str
     source_id: str
     step: str
+    target_id: str | None = None
     status: str
     retry_count: int
     cancel_requested: bool
@@ -118,6 +166,8 @@ class TaskView(BaseModel):
     completed_jobs: int
     failed_jobs: int
     cancelled_jobs: int
+    progress: float = 0
+    sources: list[dict[str, Any]] = Field(default_factory=list)
     jobs: list[JobView] = Field(default_factory=list)
     error: str | None = None
 

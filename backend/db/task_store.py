@@ -76,6 +76,10 @@ class TaskStore:
                     WHERE cancel_requested = 1;
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "sequence" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0")
+            connection.execute("PRAGMA journal_mode = WAL")
 
     def register_file(self, record: dict[str, Any]) -> None:
         with self._connect() as connection:
@@ -117,6 +121,16 @@ class TaskStore:
                 "SELECT * FROM files WHERE id = ?", (file_id,)
             ).fetchone()
 
+    def get_files(self, file_ids: list[str]) -> dict[str, sqlite3.Row]:
+        if not file_ids:
+            return {}
+        placeholders = ",".join("?" for _ in file_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM files WHERE id IN ({placeholders})", file_ids
+            ).fetchall()
+        return {row["id"]: row for row in rows}
+
     def create_task(self, task_id: str, source_id: str, rule: dict[str, Any], job: dict[str, Any]) -> None:
         now = utc_now()
         with self._connect() as connection:
@@ -152,22 +166,15 @@ class TaskStore:
 
     def get_job_by_output_name(self, output_name: str) -> sqlite3.Row | None:
         with self._connect() as connection:
-            return connection.execute(
-                "SELECT * FROM jobs WHERE output_path LIKE ? ORDER BY updated_at DESC LIMIT 1",
-                (f"%/{output_name}",),
-            ).fetchone()
-
-    def get_job_by_output_name(self, output_name: str) -> sqlite3.Row | None:
-        with self._connect() as connection:
-            return connection.execute(
-                "SELECT * FROM jobs WHERE output_path LIKE ? ORDER BY updated_at DESC LIMIT 1",
-                (f"%/{output_name}",),
-            ).fetchone()
+            for row in connection.execute("SELECT * FROM jobs WHERE status = 'done' AND output_path != ''"):
+                if Path(row["output_path"]).name == output_name:
+                    return row
+            return None
 
     def get_jobs(self, task_id: str) -> list[sqlite3.Row]:
         with self._connect() as connection:
             return connection.execute(
-                "SELECT * FROM jobs WHERE task_id = ? ORDER BY created_at", (task_id,)
+                "SELECT * FROM jobs WHERE task_id = ? ORDER BY sequence, rowid", (task_id,)
             ).fetchall()
 
     def update_job(self, job_id: str, **fields: Any) -> None:
@@ -194,6 +201,11 @@ class TaskStore:
 
     def set_task_status(self, task_id: str, status: str, error: str | None = None) -> None:
         with self._connect() as connection:
+            current = connection.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if current and current["status"] in {"completed", "partial_failed", "failed", "cancelled"}:
+                if current["status"] != status:
+                    raise ValueError("task terminal state cannot be changed")
+                return
             connection.execute(
                 "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?",
                 (status, error, utc_now(), task_id),
@@ -228,10 +240,68 @@ class TaskStore:
     def recover_processing(self) -> None:
         with self._connect() as connection:
             connection.execute(
-                "UPDATE jobs SET status = 'failed', error = 'process_restarted', updated_at = ? WHERE status = 'processing'",
+                "UPDATE jobs SET status = 'failed', error = 'process_restarted', updated_at = ? WHERE status = 'processing' AND cancel_requested = 0",
+                (utc_now(),),
+            )
+            connection.execute(
+                "UPDATE jobs SET status = 'cancelled', updated_at = ? WHERE cancel_requested = 1 AND status IN ('pending', 'processing', 'failed')",
                 (utc_now(),),
             )
             connection.execute(
                 "UPDATE tasks SET status = 'queued', updated_at = ? WHERE status IN ('running', 'cancelling')",
                 (utc_now(),),
             )
+
+    def list_active_tasks(self) -> list[sqlite3.Row]:
+        with self._connect() as connection:
+            return connection.execute("SELECT * FROM tasks WHERE status IN ('queued', 'running', 'cancelling')").fetchall()
+
+    def create_batch(self, task_id: str, source_ids: list[str], rule: dict[str, Any], jobs: list[dict[str, Any]]) -> None:
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO tasks (id, created_at, updated_at, source_ids, edit_rule) VALUES (?, ?, ?, ?, ?)",
+                (task_id, now, now, json.dumps(source_ids), json.dumps(rule)),
+            )
+            for sequence, job in enumerate(jobs):
+                connection.execute(
+                    """INSERT INTO jobs (id, task_id, source_id, step, target_id, status, prompt, mask_path,
+                    input_path, output_path, sequence, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (job["id"], task_id, job["source_id"], job["step"], job.get("target_id"),
+                     job.get("status", "pending"), job["prompt"], job["mask_path"], job["input_path"],
+                     job.get("output_path", ""), sequence, now, now),
+                )
+
+    def get_pending_jobs(self, task_id: str) -> list[sqlite3.Row]:
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT * FROM jobs WHERE task_id = ? AND status IN ('pending', 'failed') ORDER BY sequence, rowid",
+                (task_id,),
+            ).fetchall()
+
+    def finalize_task(self, task_id: str) -> str:
+        with self._connect() as connection:
+            jobs = connection.execute("SELECT status FROM jobs WHERE task_id = ?", (task_id,)).fetchall()
+            task = connection.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if task is None:
+                raise ValueError("task not found")
+            statuses = [job["status"] for job in jobs]
+            if any(status in {"pending", "processing"} for status in statuses):
+                return task["status"]
+            if task["status"] == "cancelling" and any(status == "cancelled" for status in statuses):
+                final = "cancelled"
+            elif statuses and all(status == "done" for status in statuses):
+                final = "completed"
+            elif any(status == "done" for status in statuses):
+                final = "partial_failed"
+            elif any(status == "cancelled" for status in statuses):
+                final = "cancelled"
+            else:
+                final = "failed"
+            connection.execute(
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')",
+                (final, utc_now(), task_id),
+            )
+            return final

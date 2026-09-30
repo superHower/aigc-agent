@@ -1,6 +1,6 @@
 # ECOM IMAGE STUDIO
 
-当前实现包含单图编辑闭环，以及第二阶段 OCR 分析：上传图片、识别文字、生成独立 Mask、创建异步单图编辑任务、查询任务、取消任务和下载输出。
+当前实现包含第三阶段批量任务：上传图片、OCR 识别文字、生成独立 Mask、按图片串行批量编辑、最多 3 个模型调用并发、查询任务、取消任务和下载输出。
 
 ## 启动
 
@@ -37,6 +37,10 @@ curl -F 'files=@test.png' http://localhost:8000/api/upload
 curl -X POST http://localhost:8000/api/analyze \
   -H 'Content-Type: application/json' \
   -d '{"file_ids":["src_xxx"]}'
+
+curl -X POST http://localhost:8000/api/generate/batch \
+  -H 'Content-Type: application/json' \
+  -d '{"source_ids":["src_xxx"],"edit_rule":{"quality":"high","strategy":"serial"},"per_source_overrides":{"src_xxx":{"text_blocks":[{"id":"T1","replace":"新品首发"}]}}}'
 
 curl -X POST http://localhost:8000/api/task/create \
   -H 'Content-Type: application/json' \
