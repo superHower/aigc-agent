@@ -135,6 +135,24 @@ class BatchRequest(BaseModel):
         return value
 
 
+class PromptPreviewRequest(BaseModel):
+    prompt_type: Literal["background", "shade", "bulb", "text", "logo"]
+    background: str = ""
+    subject: str = "product"
+    target: str = "target component"
+    color: str = ""
+    bulb: str = ""
+    original: str = ""
+    replace: str = ""
+    position: str = "center"
+    brand: str = ""
+
+
+class PromptPreviewResponse(BaseModel):
+    prompt_type: str
+    prompt: str
+
+
 class RetryRequest(BaseModel):
     job_id: str | None = None
     source_id: str | None = None

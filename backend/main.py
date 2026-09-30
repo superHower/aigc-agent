@@ -25,6 +25,8 @@ from backend.models.schemas import (
     TaskView,
     UploadFileInfo,
     UploadResponse,
+    PromptPreviewRequest,
+    PromptPreviewResponse,
 )
 from backend.services.file_storage import save_source, validate_image_bytes
 from backend.services.image_editor import ImageEditor
@@ -32,6 +34,7 @@ from backend.services.model_registry import ModelRegistry
 from backend.services.task_manager import TaskManager
 from backend.services.analyzer import Analyzer
 from backend.services.ocr_service import OCRService
+from backend.services.prompt_builder import PromptContext, PromptType, build_prompt
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -206,11 +209,12 @@ async def generate_batch(payload: BatchRequest, request: Request):
             if mask_record is None:
                 raise HTTPException(status_code=500, detail=f"mask not found: {mask_id}")
             job_id = f"batch_{uuid4().hex}_{source_id}_text_{block.id}"
-            prompt = (
-                f'Replace the text "{block.original}" located in the {block.position} area with "{replacement.replace}". '
-                "Match the original font style, weight, color, size, perspective, and shadow exactly. "
-                "Do not alter any other text, graphics, product, or background. Output a photorealistic e-commerce product image."
-            )
+            prompt = build_prompt(PromptContext(
+                prompt_type=PromptType.TEXT,
+                original=block.original,
+                replace=replacement.replace,
+                position=block.position,
+            ))
             job = {
                 "id": job_id,
                 "source_id": source_id,
@@ -230,6 +234,27 @@ async def generate_batch(payload: BatchRequest, request: Request):
     current.store.create_batch(task_id, payload.source_ids, payload.edit_rule.model_dump(), jobs)
     await current.manager.create_batch(task_id, source_jobs, payload.edit_rule.model_dump())
     return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "source_count": len(source_jobs)}
+
+
+@app.post("/api/prompt/preview", response_model=PromptPreviewResponse)
+async def prompt_preview(payload: PromptPreviewRequest):
+    try:
+        prompt_type = PromptType(payload.prompt_type)
+        prompt = build_prompt(PromptContext(
+            prompt_type=prompt_type,
+            background=payload.background,
+            subject=payload.subject,
+            target=payload.target,
+            color=payload.color,
+            bulb=payload.bulb,
+            original=payload.original,
+            replace=payload.replace,
+            position=payload.position,
+            brand=payload.brand,
+        ))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PromptPreviewResponse(prompt_type=payload.prompt_type, prompt=prompt)
 
 
 def task_view(request: Request, task_id: str) -> TaskView:

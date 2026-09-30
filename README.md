@@ -42,6 +42,10 @@ curl -X POST http://localhost:8000/api/generate/batch \
   -H 'Content-Type: application/json' \
   -d '{"source_ids":["src_xxx"],"edit_rule":{"quality":"high","strategy":"serial"},"per_source_overrides":{"src_xxx":{"text_blocks":[{"id":"T1","replace":"新品首发"}]}}}'
 
+curl -X POST http://localhost:8000/api/prompt/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt_type":"text","original":"音乐随身携带","replace":"新品首发","position":"top-left"}'
+
 curl -X POST http://localhost:8000/api/task/create \
   -H 'Content-Type: application/json' \
   -d '{"file_id":"src_xxx","mask":{"x1":100,"y1":100,"x2":500,"y2":220},"prompt":"Replace the text in this area with New Copy."}'
@@ -59,3 +63,7 @@ curl -X POST http://localhost:8000/api/task/task_xxx/cancel
 分析结果保存在 SQLite 中，同一 `file_id` 重复分析使用缓存以保持编号和 Mask URL 稳定。单张图片失败会返回该图片的 `error`，不会中断其他图片。首次分析需要下载 PaddleOCR 模型；后续使用本地模型缓存。CPU 推理在线程中运行并串行访问 OCR 引擎，不阻塞异步接口。
 
 本阶段只识别文字，不进行 Logo 检测；`logo_blocks` 暂为空。Mask 向外扩展 6 像素并裁剪到原图边界，保持原图尺寸和 RGBA Alpha 语义。
+
+## Prompt 模板
+
+第四阶段将 Prompt 统一收敛到 `backend/services/prompt_builder.py`，支持 `background`、`shade`、`bulb`、`text` 和 `logo` 五类模板。批量文字替换强制携带原文、替换文案和九宫格位置；实际调用的完整 Prompt 会随 Job 输入快照保存。`POST /api/prompt/preview` 可在提交任务前预览模板渲染结果。
