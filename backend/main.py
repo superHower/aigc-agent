@@ -234,6 +234,19 @@ async def generate_batch(payload: BatchRequest, request: Request):
     if missing:
         raise HTTPException(status_code=404, detail={"missing_file_ids": missing})
 
+    reference_paths: list[str] = []
+    for reference_id in payload.edit_rule.reference_file_ids:
+        reference = current.store.get_file(reference_id)
+        if reference is None:
+            raise HTTPException(status_code=404, detail=f"reference file not found: {reference_id}")
+        reference_paths.append(reference["path"])
+    if payload.edit_rule.logo_replace_enabled and payload.edit_rule.logo_reference_file_id:
+        logo_reference = current.store.get_file(payload.edit_rule.logo_reference_file_id)
+        if logo_reference is None:
+            raise HTTPException(status_code=404, detail="logo reference file not found")
+        if logo_reference["path"] not in reference_paths:
+            reference_paths.append(logo_reference["path"])
+
     jobs: list[dict[str, str]] = []
     source_jobs: dict[str, list[dict[str, str]]] = {}
     for source_id in payload.source_ids:
@@ -245,7 +258,8 @@ async def generate_batch(payload: BatchRequest, request: Request):
         overrides = payload.per_source_overrides.get(source_id, {})
         replacements = {item.id: item for item in overrides.text_blocks}
         source_job_list: list[dict[str, str]] = []
-        for block in analysis.text_blocks:
+        blocks = analysis.text_blocks if payload.edit_rule.text_replace_enabled else []
+        for block in blocks:
             replacement = replacements.get(block.id)
             if not replacement or not replacement.enabled or not replacement.replace.strip() or replacement.replace.strip() == block.original.strip():
                 continue
@@ -271,13 +285,54 @@ async def generate_batch(payload: BatchRequest, request: Request):
             }
             jobs.append(job)
             source_job_list.append(job)
+        if payload.edit_rule.logo_replace_enabled and payload.edit_rule.logo_reference_file_id:
+            for logo_index, logo in enumerate(analysis.logo_blocks):
+                bbox = logo.get("bbox") if isinstance(logo, dict) else None
+                if not bbox or len(bbox) != 4:
+                    continue
+                logo_mask = current.settings.data_dir / "masks" / f"logo_{uuid4().hex}.png"
+                create_mask(source["width"], source["height"], tuple(bbox), logo_mask)
+                job_id = f"batch_{uuid4().hex}_{source_id}_logo_{logo_index + 1}"
+                job = {
+                    "id": job_id,
+                    "source_id": source_id,
+                    "step": f"logo_{logo_index + 1}",
+                    "target_id": f"logo_{logo_index + 1}",
+                    "prompt": build_prompt(PromptContext(
+                        prompt_type=PromptType.LOGO,
+                        brand=payload.edit_rule.logo_brand or "指定 Logo",
+                        position=payload.edit_rule.logo_position,
+                    )),
+                    "mask_path": str(logo_mask),
+                    "input_path": source["path"],
+                }
+                jobs.append(job)
+                source_job_list.append(job)
+        if payload.edit_rule.custom_prompt.strip():
+            full_mask = current.settings.data_dir / "masks" / f"custom_{uuid4().hex}.png"
+            create_mask(source["width"], source["height"], (0, 0, source["width"], source["height"]), full_mask)
+            for variant in range(payload.edit_rule.generation_count):
+                job_id = f"batch_{uuid4().hex}_{source_id}_custom_{variant + 1}"
+                job = {
+                    "id": job_id,
+                    "source_id": source_id,
+                    "step": f"custom_{variant + 1}",
+                    "target_id": None,
+                    "prompt": payload.edit_rule.custom_prompt.strip(),
+                    "mask_path": str(full_mask),
+                    "input_path": source["path"],
+                }
+                jobs.append(job)
+                source_job_list.append(job)
         source_jobs[source_id] = source_job_list
 
     if not jobs:
-        raise HTTPException(status_code=422, detail="no enabled text replacements were provided")
+        raise HTTPException(status_code=422, detail="请填写文字替换或自定义提示词")
     task_id = f"task_{uuid4().hex}"
-    current.store.create_batch(task_id, payload.source_ids, payload.edit_rule.model_dump(), jobs)
-    await current.manager.create_batch(task_id, source_jobs, payload.edit_rule.model_dump())
+    rule = payload.edit_rule.model_dump()
+    rule["reference_paths"] = reference_paths
+    current.store.create_batch(task_id, payload.source_ids, rule, jobs)
+    await current.manager.create_batch(task_id, source_jobs, rule)
     return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "source_count": len(source_jobs)}
 
 

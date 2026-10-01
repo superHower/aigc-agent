@@ -114,12 +114,18 @@ class BatchEditRule(BaseModel):
     model_config = {"extra": "forbid"}
     text_replace_enabled: bool = True
     logo_replace_enabled: bool = False
+    logo_reference_file_id: str = ""
+    logo_brand: str = ""
+    logo_position: str = "center"
     background_replace_enabled: bool = False
     background_prompt: str = ""
     shade_color_enabled: bool = False
     shade_color: str = ""
     bulb_replace_enabled: bool = False
     bulb_prompt: str = ""
+    custom_prompt: str = Field(default="", max_length=32000)
+    reference_file_ids: list[str] = Field(default_factory=list, max_length=5)
+    generation_count: int = Field(default=1, ge=1, le=4)
     size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "auto"
     quality: Literal["low", "medium", "high", "xhigh", "max", "auto"] = "high"
     output_format: Literal["png", "jpeg", "webp"] = "png"

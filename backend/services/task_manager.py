@@ -174,6 +174,7 @@ class TaskManager:
         for job_data in jobs:
             if current_input is not None:
                 job_data["input_path"] = str(current_input)
+            is_variant = job_data["step"].startswith("custom_")
             job = self.store.get_job(job_data["id"])
             if job is None or job["status"] == "done":
                 if job and job["output_path"]:
@@ -183,7 +184,8 @@ class TaskManager:
             completed = self.store.get_job(job_data["id"])
             if completed is None or completed["status"] != "done":
                 return
-            current_input = Path(completed["output_path"])
+            if not is_variant:
+                current_input = Path(completed["output_path"])
 
     def _scaled_mask(self, mask_path: Path, input_path: Path, job_id: str) -> Path:
         with Image.open(mask_path) as mask, Image.open(input_path) as image:
@@ -211,7 +213,7 @@ class TaskManager:
                         job_id=job_data["id"], input_path=input_path, mask_path=mask_path,
                         prompt=job_data["prompt"], size=rule["size"], quality=rule["quality"],
                         output_format=rule["output_format"], request_timeout=self.request_timeout,
-                        reference_path=Path(job_data["reference_path"]) if job_data.get("reference_path") else None,
+                        reference_paths=[Path(path) for path in rule.get("reference_paths", [])],
                     ), timeout=self.job_timeout)
                 job = self.store.get_job(job_data["id"])
                 if job and job["cancel_requested"]:

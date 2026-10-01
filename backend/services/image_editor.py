@@ -28,6 +28,7 @@ class ImageEditor:
         input_path: Path,
         mask_path: Path,
         reference_path: Path | None = None,
+        reference_paths: list[Path] | None = None,
         prompt: str,
         size: str,
         quality: str,
@@ -44,7 +45,7 @@ class ImageEditor:
             "input_sha256": hashlib.sha256(input_bytes).hexdigest(),
             "mask_path": str(mask_path),
             "mask_sha256": hashlib.sha256(mask_bytes).hexdigest(),
-            "reference_path": str(reference_path) if reference_path else None,
+            "reference_paths": [str(path) for path in (reference_paths or ([reference_path] if reference_path else []))],
             "prompt": prompt,
             "model": model,
             "size": size,
@@ -58,9 +59,8 @@ class ImageEditor:
 
         with input_path.open("rb") as image_file, mask_path.open("rb") as mask_file:
             image_inputs = [image_file]
-            reference_file = reference_path.open("rb") if reference_path else None
-            if reference_file:
-                image_inputs.append(reference_file)
+            reference_files = [path.open("rb") for path in (reference_paths or ([reference_path] if reference_path else []))]
+            image_inputs.extend(reference_files)
             result = await self.client.images.edit(
                 model=model,
                 image=image_inputs,
@@ -72,7 +72,7 @@ class ImageEditor:
                 n=1,
                 timeout=request_timeout,
             )
-            if reference_file:
+            for reference_file in reference_files:
                 reference_file.close()
 
         if not result.data:
