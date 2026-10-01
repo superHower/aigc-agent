@@ -5,7 +5,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 backend/media/
-backend/data/*.db
+backend/data/*.db*
 .DS_Store
 img
 media
