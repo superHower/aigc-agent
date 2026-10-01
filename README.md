@@ -4,6 +4,60 @@
 
 ## 启动
 
+### Docker 一键启动
+
+#### Windows
+
+1. 安装 Docker Desktop for Windows，安装时启用 WSL 2 backend。
+2. 启动 Docker Desktop，确认右下角状态为 Running。
+3. 用 PowerShell 进入项目根目录：
+
+```powershell
+cd C:\path\to\aigc-agent
+Copy-Item .env.example .env
+notepad .env
+```
+
+在 `.env` 中填入 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`，保存后执行：
+
+```powershell
+docker compose up --build
+```
+
+浏览器打开 `http://localhost:8080`。停止服务时，在 PowerShell 按 `Ctrl+C`，或者执行：
+
+```powershell
+docker compose down
+```
+
+Windows 不需要安装 Conda、Python、Node.js 或 PaddleOCR；这些依赖都在 Docker 容器中安装。
+
+#### macOS / Linux
+
+电脑安装 Docker 后，在项目根目录执行：
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入 OPENAI_API_KEY 和 OPENAI_BASE_URL
+docker compose up --build
+```
+
+打开 `http://localhost:8080` 使用系统，API 文档地址为 `http://localhost:8080/docs`。
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+上传文件、任务数据库和生成结果保存在 Docker volumes 中。需要连同数据一起删除时执行：
+
+```bash
+docker compose down -v
+```
+
+首次构建会安装 OCR、图像处理和模型依赖，耗时可能较长；之后启动可直接执行 `docker compose up`。
+
 ```bash
 cp .env.example .env
 # 编辑 .env，填入 OPENAI_API_KEY 和 OPENAI_BASE_URL

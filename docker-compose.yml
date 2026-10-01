@@ -1,0 +1,30 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    platform: linux/amd64
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/backend/media
+      DATABASE_PATH: /app/backend/data/tasks.db
+      FRONTEND_ORIGINS: http://localhost:8080
+    volumes:
+      - backend-media:/app/backend/media
+      - backend-data:/app/backend/data
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  backend-media:
+  backend-data:
