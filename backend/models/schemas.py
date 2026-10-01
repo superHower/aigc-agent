@@ -28,7 +28,7 @@ class UploadResponse(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    file_ids: list[str] = Field(min_length=1, max_length=16)
+    file_ids: list[str] = Field(min_length=1, max_length=50)
 
 
 class TextBlockView(BaseModel):
@@ -158,6 +158,26 @@ class BatchRequest(BaseModel):
         return value
 
 
+class MultiImageRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    source_ids: list[str] = Field(min_length=1, max_length=50)
+    mode: Literal["shared", "reference"] = "shared"
+    prompt: str = Field(default="", max_length=32000)
+    aspect_ratios: list[Literal["original", "1:1", "3:4", "16:9"]] = Field(default_factory=lambda: ["original"], min_length=1, max_length=4)
+    reference_file_id: str | None = None
+    reference_component: str = Field(default="背景", min_length=1, max_length=1000)
+    ocr_enabled: bool = False
+    per_source_overrides: dict[str, SourceOverrides] = Field(default_factory=dict)
+    quality: Literal["low", "medium", "high", "xhigh", "max", "auto"] = "high"
+
+    @field_validator("source_ids", "aspect_ratios")
+    @classmethod
+    def unique_values(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("values must be unique")
+        return value
+
+
 class PromptPreviewRequest(BaseModel):
     prompt_type: Literal["background", "shade", "bulb", "text", "logo"]
     background: str = ""
@@ -210,6 +230,7 @@ class JobView(BaseModel):
     input_path: str
     output_path: str
     output_url: str | None = None
+    output_filename: str | None = None
     error: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -228,6 +249,8 @@ class TaskView(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     jobs: list[JobView] = Field(default_factory=list)
     error: str | None = None
+    estimated_cost: float = 0
+    max_concurrency: int = 3
 
 
 class CancelResponse(BaseModel):

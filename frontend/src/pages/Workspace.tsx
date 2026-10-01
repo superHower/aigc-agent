@@ -1,162 +1,127 @@
-import { useMemo, useRef, useState } from 'react'
-import { Alert, Button, Card, Checkbox, Col, Collapse, Input, InputNumber, Layout, Progress, Row, Select, Space, Switch, Tag, Typography, Upload, message } from 'antd'
-import { InboxOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { useRef, useState } from 'react'
+import { Alert, Button, Card, Checkbox, Col, Image, Input, Layout, Progress, Row, Select, Space, Switch, Tag, Typography, Upload, message } from 'antd'
+import { InboxOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import type { UploadProps } from 'antd'
-import { analyzeFiles, generateBatch, previewPrompt, uploadFiles, type AnalysisFile, type TextBlock } from '../api/client'
+import { analyzeFiles, generateMultiImage, uploadFiles, type AnalysisFile, type UploadedFile } from '../api/client'
 import { AnnotatedImage } from '../components/AnnotatedImage'
 import { TextBlockTable } from '../components/TextBlockTable'
 import { useTaskProgress } from '../hooks/useTaskProgress'
 import { AppHeader } from '../components/AppHeader'
+import { TaskResults } from '../components/TaskResults'
 
-const { Dragger } = Upload
+const ratioOptions = [{ label: '原比例', value: 'original' }, { label: '1:1', value: '1:1' }, { label: '3:4', value: '3:4' }, { label: '16:9', value: '16:9' }]
+const terminalStatuses = ['completed', 'partial_failed', 'failed', 'cancelled']
 
 export function Workspace() {
+  const [files, setFiles] = useState<UploadedFile[]>([])
   const [analysis, setAnalysis] = useState<AnalysisFile[]>([])
-  const [uploadedFiles, setUploadedFiles] = useState<Awaited<ReturnType<typeof uploadFiles>>['files']>([])
+  const [ocrEnabled, setOcrEnabled] = useState(false)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
-  const [replacements, setReplacements] = useState<Record<string, { replace: string; enabled: boolean }>>({})
-  const [brand, setBrand] = useState('')
-  const [logoEnabled, setLogoEnabled] = useState(false)
-  const [logoReferenceId, setLogoReferenceId] = useState('')
-  const [logoBrand, setLogoBrand] = useState('')
-  const [referenceIds, setReferenceIds] = useState<string[]>([])
-  const [customPrompt, setCustomPrompt] = useState('')
-  const [generationCount, setGenerationCount] = useState(1)
-  const [strategy, setStrategy] = useState<'serial'>('serial')
+  const [replacements, setReplacements] = useState<Record<string, Record<string, { replace: string; enabled: boolean }>>>({})
+  const [mode, setMode] = useState<'shared' | 'reference'>('shared')
+  const [prompt, setPrompt] = useState('')
+  const [ratios, setRatios] = useState<string[]>(['original'])
+  const [targets, setTargets] = useState<string[]>([])
+  const [referenceId, setReferenceId] = useState<string>()
+  const [component, setComponent] = useState('背景')
   const [quality, setQuality] = useState('high')
-  const [promptPreviews, setPromptPreviews] = useState<Record<string, string>>({})
-  const [taskId, setTaskId] = useState<string | null>(null)
   const [rightsConfirmed, setRightsConfirmed] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const uploadInProgress = useRef(false)
+  const [taskId, setTaskId] = useState<string | null>(() => sessionStorage.getItem('workspace-task-id'))
   const { task, error: taskError } = useTaskProgress(taskId)
-  const current = analysis.find((item) => item.file_id === selectedFile) ?? analysis[0]
+  const currentFile = files.find((file) => file.file_id === selectedFile) ?? files[0]
+  const currentAnalysis = analysis.find((item) => item.file_id === currentFile?.file_id)
+  const sourceIds = mode === 'shared' ? files.map((file) => file.file_id) : targets
+  const ocrSteps = ocrEnabled && mode === 'shared' ? analysis.reduce((total, item) => total + item.text_blocks.filter((block) => {
+    const replacement = replacements[item.file_id]?.[block.id]
+    return replacement?.enabled && replacement.replace.trim() && replacement.replace.trim() !== block.original.trim()
+  }).length, 0) : 0
+  const expectedCount = sourceIds.length * ratios.length + ocrSteps
+  const fileOptions = files.map((file) => ({ value: file.file_id, label: file.filename }))
+
+  const analyze = async (uploaded: UploadedFile[]) => {
+    if (!uploaded.length) return
+    setAnalyzing(true)
+    try {
+      const result = await analyzeFiles(uploaded.map((file) => file.file_id))
+      setAnalysis((previous) => [...previous.filter((item) => !uploaded.some((file) => file.file_id === item.file_id)), ...result.files])
+      if (result.files.some((item) => item.error)) message.warning('部分图片识别失败，请重新识别后再提交 OCR 编辑')
+    } catch (reason) { message.error(reason instanceof Error ? reason.message : 'OCR 识别失败') }
+    finally { setAnalyzing(false) }
+  }
 
   const uploadProps: UploadProps = {
-    multiple: true,
-    fileList: [],
-    accept: 'image/png,image/jpeg,image/webp',
-    showUploadList: false,
-    disabled: uploading,
+    multiple: true, fileList: [], accept: 'image/png,image/jpeg,image/webp', showUploadList: false, disabled: uploading || analyzing,
     beforeUpload: async (file, fileList) => {
-      if (file !== fileList[fileList.length - 1]) return false
-      if (uploadInProgress.current) return false
-      const remaining = 5 - uploadedFiles.length
-      if (remaining <= 0) {
-        message.warning('最多上传 5 张图片，已有图片会保留')
-        return false
-      }
-      if (fileList.length > remaining) {
-        message.warning(`还可上传 ${remaining} 张图片，本次仅上传前 ${remaining} 张`)
-      }
+      if (file !== fileList[fileList.length - 1] || uploadInProgress.current) return false
+      if (files.length + fileList.length > 50) { message.warning('最多上传 50 张图片'); return false }
       uploadInProgress.current = true
       setUploading(true)
       try {
-        const files = fileList.slice(0, remaining) as unknown as File[]
-        const uploaded = await uploadFiles(files)
-        setUploadedFiles((previous) => [...previous, ...uploaded.files])
-        setSelectedFile((previous) => previous ?? uploaded.files[0]?.file_id ?? null)
-        const analyzed = await analyzeFiles(uploaded.files.map((file) => file.file_id))
-        setAnalysis((previous) => [...previous, ...analyzed.files])
-        message.success(`已分析 ${analyzed.files.length} 张图片`)
-      } catch (reason) {
-        message.error(reason instanceof Error ? reason.message : '上传或分析失败')
-      } finally {
-        uploadInProgress.current = false
-        setUploading(false)
-      }
+        const result = await uploadFiles([...fileList].sort((first, second) => first.name.localeCompare(second.name, 'zh-CN', { numeric: true })))
+        const next = [...files, ...result.files].sort((first, second) => first.filename.localeCompare(second.filename, 'zh-CN', { numeric: true }))
+        setFiles(next)
+        setSelectedFile((previous) => previous ?? next[0]?.file_id ?? null)
+        if (ocrEnabled && mode === 'shared') await analyze(result.files)
+      } catch (reason) { message.error(reason instanceof Error ? reason.message : '上传失败') }
+      finally { uploadInProgress.current = false; setUploading(false) }
       return false
     },
   }
 
-  const allBlocks = useMemo(() => analysis.flatMap((item) => item.text_blocks), [analysis])
-  const updateReplacement = (id: string, value: { replace: string; enabled: boolean }) => {
-    setReplacements((currentValue) => ({ ...currentValue, [id]: value }))
-  }
-
-  const handlePreview = async () => {
-    const previewBlocks = allBlocks.filter((block) => replacements[block.id]?.replace?.trim())
-    if (!previewBlocks.length) {
-      message.warning('请至少填写一个文字块的替换文案')
-      return
-    }
+  const generate = async () => {
+    if (!rightsConfirmed) { message.warning('请确认拥有素材使用权'); return }
+    if (!sourceIds.length || !ratios.length) { message.warning('请选择待处理图片和至少一种比例'); return }
+    if (mode === 'shared' && !prompt.trim()) { message.warning('请填写通用提示词'); return }
+    if (mode === 'reference' && (!referenceId || !component.trim())) { message.warning('请选择参考图并填写替换内容'); return }
+    const overrides = Object.fromEntries(sourceIds.map((sourceId) => [sourceId, { text_blocks: Object.entries(replacements[sourceId] ?? {}).map(([id, value]) => ({ id, ...value })) }]))
+    setSubmitting(true)
     try {
-      const results = await Promise.all(previewBlocks.map(async (block) => {
-        const result = await previewPrompt({ prompt_type: 'text', original: block.original, replace: replacements[block.id].replace, position: block.position })
-        return [block.id, result.prompt] as const
-      }))
-      setPromptPreviews(Object.fromEntries(results))
-    } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : '提示词预览失败')
-    }
-  }
-
-  const handleGenerate = async () => {
-    if (!rightsConfirmed) {
-      message.warning('请确认拥有素材使用权')
-      return
-    }
-    const overrides: Record<string, { text_blocks: { id: string; replace: string; enabled: boolean }[] }> = {}
-    analysis.forEach((item) => {
-      overrides[item.file_id] = { text_blocks: item.text_blocks.map((block) => ({ id: block.id, ...(replacements[block.id] ?? { replace: '', enabled: true }) })) }
-    })
-    try {
-      const result = await generateBatch({
-        source_ids: analysis.map((item) => item.file_id),
-        edit_rule: {
-          strategy, quality, logo_replace_enabled: logoEnabled, logo_reference_file_id: logoReferenceId,
-          logo_brand: logoBrand, custom_prompt: customPrompt, reference_file_ids: referenceIds, generation_count: generationCount,
-        },
-        per_source_overrides: overrides,
-      })
+      const result = await generateMultiImage({ source_ids: sourceIds, mode, prompt, aspect_ratios: ratios, reference_file_id: referenceId, reference_component: component, ocr_enabled: ocrEnabled && mode === 'shared', per_source_overrides: overrides, quality })
       setTaskId(result.task_id)
-      message.success('批量任务已提交')
-    } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : '任务提交失败')
-    }
+      sessionStorage.setItem('workspace-task-id', result.task_id)
+      message.success('任务已提交，可继续提交其他任务；所有任务共享并发额度')
+    } catch (reason) { message.error(reason instanceof Error ? reason.message : '任务提交失败') }
+    finally { setSubmitting(false) }
   }
 
-  return (
-    <Layout className="app-shell">
-      <AppHeader />
-      <Layout.Content className="workspace-content">
-        <Row gutter={[18, 18]}>
-          <Col xs={24} lg={9}>
-            <Card title="1. 上传参考图" className="panel-card">
-              <Dragger {...uploadProps}>
-                <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-                <p className="ant-upload-text">{uploading ? '正在上传并分析…' : '拖入 1–5 张参考图'}</p>
-                <p className="ant-upload-hint">支持 PNG、JPG、WebP；上传后自动 OCR</p>
-              </Dragger>
-              <Space wrap className="file-tabs">
-                {analysis.map((item, index) => <Button key={item.file_id} type={item.file_id === selectedFile ? 'primary' : 'default'} onClick={() => setSelectedFile(item.file_id)}>图片 {index + 1}</Button>)}
-              </Space>
-              {uploadedFiles.length > 0 && <div className="uploaded-grid">{uploadedFiles.map((file, index) => <div className={`uploaded-item ${file.file_id === selectedFile ? 'uploaded-item-active' : ''}`} key={file.file_id} onClick={() => setSelectedFile(file.file_id)}><img src={file.url} alt={file.filename} /><span>图片 {index + 1}</span></div>)}</div>}
-              {current && <AnnotatedImage analysis={current} activeBlockId={activeBlockId} onSelect={(block) => setActiveBlockId(block.id)} />}
-            </Card>
-          </Col>
-          <Col xs={24} lg={15}>
-            <Card title="2. 文字块编辑" className="panel-card" extra={current ? <Tag>{current.text_blocks.length} 个文字块</Tag> : null}>
-              {current ? <TextBlockTable blocks={current.text_blocks} replacements={replacements} activeId={activeBlockId} onHover={setActiveBlockId} onChange={updateReplacement} /> : <Typography.Paragraph type="secondary">上传图片后，这里会显示 OCR 检测到的文字块。</Typography.Paragraph>}
-            </Card>
-            <Card title="3. 生成规则" className="panel-card">
-              <Row gutter={12}>
-                <Col span={12}><Typography.Text>品牌/Logo 文案</Typography.Text><Input value={brand} onChange={(event) => setBrand(event.target.value)} placeholder="例如 STRYVAN" /></Col>
-                <Col span={6}><Typography.Text>策略</Typography.Text><Select value={strategy} options={[{ value: 'serial', label: '串行精修' }]} /></Col>
-                <Col span={6}><Typography.Text>质量</Typography.Text><Select value={quality} onChange={setQuality} options={['low', 'medium', 'high', 'xhigh', 'max'].map((value) => ({ value, label: value }))} /></Col>
-              </Row>
-              <Card size="small" title="Logo 替换（可选）" className="option-card"><Space wrap><Switch checked={logoEnabled} onChange={setLogoEnabled} /><span>仅在 OCR 检测到 Logo 时替换</span><Input value={logoBrand} onChange={(event) => setLogoBrand(event.target.value)} placeholder="Logo 文案，例如 STRYVAN" disabled={!logoEnabled} style={{ width: 220 }} /><Select value={logoReferenceId || undefined} onChange={setLogoReferenceId} placeholder="选择 Logo 参考图" disabled={!logoEnabled} options={uploadedFiles.map((file) => ({ value: file.file_id, label: file.filename }))} style={{ width: 220 }} /></Space></Card>
-              <Card size="small" title="参考图与自定义提示词" className="option-card"><Select mode="multiple" value={referenceIds} onChange={setReferenceIds} placeholder="选择要提供给模型的参考图（可多选）" options={uploadedFiles.map((file) => ({ value: file.file_id, label: file.filename }))} style={{ width: '100%' }} maxTagCount="responsive" /><Input.TextArea value={customPrompt} onChange={(event) => setCustomPrompt(event.target.value)} placeholder="可选，例如：结合图片一的背景、图片二的灯具样式生成新的电商图片。" autoSize={{ minRows: 3, maxRows: 7 }} /></Card>
-              <Space className="option-row"><Typography.Text>生成张数</Typography.Text><InputNumber min={1} max={4} value={generationCount} onChange={(value) => setGenerationCount(value ?? 1)} /><Typography.Text type="secondary">自定义提示词会按此数量生成独立结果</Typography.Text></Space>
-              <Collapse className="prompt-collapse" items={[{ key: 'prompt', label: '中文提示词预览', children: <Space direction="vertical" className="prompt-list">{allBlocks.filter((block) => replacements[block.id]?.replace?.trim()).map((block) => <Card size="small" key={block.id} title={`${block.id}：${block.original} → ${replacements[block.id].replace}`}><Typography.Text copyable={{ text: promptPreviews[block.id] }}>{promptPreviews[block.id] || '点击“预览全部提示词”生成'}</Typography.Text></Card>)}{customPrompt.trim() && <Card size="small" title="自定义提示词"><Typography.Text copyable={{ text: customPrompt }}>{customPrompt}</Typography.Text></Card>}{!allBlocks.some((block) => replacements[block.id]?.replace?.trim()) && !customPrompt.trim() && <Typography.Text type="secondary">填写文字替换或自定义提示词后，这里会显示对应内容。</Typography.Text>}</Space> }]} />
-              <Space wrap><Button icon={<ReloadOutlined />} onClick={() => void handlePreview()}>预览全部提示词</Button><Checkbox checked={rightsConfirmed} onChange={(event) => setRightsConfirmed(event.target.checked)}>我确认拥有素材使用权</Checkbox><Button type="primary" icon={<PlayCircleOutlined />} disabled={!analysis.length} onClick={() => void handleGenerate()}>开始批量生成</Button></Space>
-            </Card>
-            {taskId && <Card title="4. 任务进度" className="panel-card"><Progress percent={Math.round((task?.progress ?? 0) * 100)} status={task?.status === 'failed' ? 'exception' : task?.status === 'completed' ? 'success' : 'active'} /><Space><Tag color="blue">{task?.status ?? 'queued'}</Tag><Typography.Text>{task?.completed_jobs ?? 0} / {task?.total_jobs ?? 0} 已完成</Typography.Text></Space>{taskError && <Alert type="error" message={taskError} />}{task?.jobs.some((job) => job.output_url) && <div className="generated-results"><Typography.Title level={5}>已生成图片</Typography.Title><div className="result-grid">{task.jobs.filter((job) => job.output_url).map((job) => <div className="result-card" key={job.id}><img src={job.output_url ?? ''} alt={job.step} /><Typography.Text ellipsis>{job.step}</Typography.Text><a href={job.output_url ?? ''} download>下载图片</a></div>)}</div><Link to={`/tasks/${task.id}`}><Button>查看任务详情</Button></Link></div>}</Card>}
-          </Col>
-        </Row>
-      </Layout.Content>
-    </Layout>
-  )
+  return <Layout className="app-shell"><AppHeader /><Layout.Content className="workspace-content">
+    <Row gutter={[18, 18]}>
+      <Col xs={24} lg={9}>
+        <Card title="1. 上传图片" className="panel-card" extra={<Tag>{files.length} / 50</Tag>}>
+          <Space wrap className="option-row"><Switch checked={ocrEnabled && mode === 'shared'} disabled={mode === 'reference' || uploading || analyzing} onChange={(enabled) => { setOcrEnabled(enabled); if (enabled) void analyze(files) }} /><Typography.Text>启用 OCR 文字识别（默认关闭）</Typography.Text>{ocrEnabled && mode === 'shared' && <Button size="small" loading={analyzing} disabled={!files.length || uploading} onClick={() => void analyze(files)}>重新识别</Button>}</Space>
+          <Upload.Dragger {...uploadProps}><p className="ant-upload-drag-icon"><InboxOutlined /></p><p className="ant-upload-text">{uploading ? '正在上传…' : analyzing ? '正在 OCR 识别…' : '拖入或选择图片，最多 50 张'}</p><p className="ant-upload-hint">PNG、JPG、WebP · 按文件名自然排序 · OCR 关闭时仅上传</p></Upload.Dragger>
+          <div className="uploaded-grid">{files.map((file) => <button type="button" className={`uploaded-item ${file.file_id === currentFile?.file_id ? 'uploaded-item-active' : ''}`} key={file.file_id} onClick={() => { setSelectedFile(file.file_id); setActiveBlockId(null) }}><img src={file.url} alt={file.filename} /><span title={file.filename}>{file.filename}</span></button>)}</div>
+          {currentFile && (ocrEnabled && mode === 'shared' && currentAnalysis ? <AnnotatedImage analysis={currentAnalysis} activeBlockId={activeBlockId} onSelect={(block) => setActiveBlockId(block.id)} /> : <Image src={currentFile.url} alt={currentFile.filename} />)}
+          {currentAnalysis?.error && ocrEnabled && <Alert type="error" message={currentAnalysis.error} />}
+        </Card>
+      </Col>
+      <Col xs={24} lg={15}>
+        <Card title="2. 批量生成模式" className="panel-card">
+          <Select value={mode} disabled={uploading || analyzing} style={{ width: '100%' }} options={[{ value: 'shared', label: '多图 · 同一个通用提示词' }, { value: 'reference', label: '参考图组合 · 批量替换指定内容' }]} onChange={(value) => { setMode(value); if (value === 'reference') setOcrEnabled(false) }} />
+          {mode === 'shared' ? <div className="option-card"><Typography.Title level={5}>通用提示词</Typography.Title><Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="所有图片独立执行此规则，例如：将背景改为干净的白色摄影棚，保持产品和文字不变。" autoSize={{ minRows: 4, maxRows: 10 }} /></div> : <Space direction="vertical" className="page-stack option-card"><Typography.Text>请把以下待处理图片的指定内容换成参考图的，其他内容不变。</Typography.Text><Select mode="multiple" style={{ width: '100%' }} value={targets} onChange={setTargets} placeholder="选择待处理图片，例如图二、图三、图四" options={fileOptions.filter((option) => option.value !== referenceId)} /><Input value={component} onChange={(event) => setComponent(event.target.value)} placeholder="要替换的内容，例如背景" /><Select style={{ width: '100%' }} value={referenceId} onChange={(value) => { setReferenceId(value); setTargets((previous) => previous.filter((id) => id !== value)) }} placeholder="选择参考图片，例如图一" options={fileOptions} /><Alert type="info" message="每张待处理图只与所选参考图组合，不启用 OCR；参考图本身不生成结果。" /></Space>}
+          <Space direction="vertical" size="middle" className="page-stack">
+            <Typography.Text strong>输出比例（每种比例生成一张，独立处理）</Typography.Text>
+            <Checkbox.Group options={ratioOptions} value={ratios} onChange={(values) => setRatios(values.map(String))} />
+            <Typography.Text type="secondary">保持内容自然比例，可调整布局和背景；最终等比缩放并补白，不拉伸图片。</Typography.Text>
+            <Space><Typography.Text>质量</Typography.Text><Select value={quality} onChange={setQuality} options={['low', 'medium', 'high', 'xhigh', 'max'].map((value) => ({ value, label: value }))} /></Space>
+            <Alert type="info" message={`预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}，预计费用 ¥${(expectedCount * 0.05).toFixed(2)}`} description="按每次生成 ¥0.05 估算；失败重试可能增加调用次数，实际费用以服务商账单为准。50 图 × 4 比例 = 200 张，预计 ¥10.00。" />
+          </Space>
+        </Card>
+        {ocrEnabled && mode === 'shared' && <Card title="OCR 文字块编辑（可选）" className="panel-card">{currentAnalysis ? <TextBlockTable blocks={currentAnalysis.text_blocks} replacements={replacements[currentAnalysis.file_id] ?? {}} activeId={activeBlockId} onHover={setActiveBlockId} onChange={(id, value) => setReplacements((previous) => ({ ...previous, [currentAnalysis.file_id]: { ...previous[currentAnalysis.file_id], [id]: value } }))} /> : <Typography.Text type="secondary">启用 OCR 后识别文字块，可先编辑文字再执行通用提示词。</Typography.Text>}</Card>}
+        <Card className="panel-card"><Space wrap><Checkbox checked={rightsConfirmed} onChange={(event) => setRightsConfirmed(event.target.checked)}>我确认拥有素材使用权</Checkbox><Button type="primary" icon={<PlayCircleOutlined />} loading={submitting} disabled={!files.length || uploading || analyzing} onClick={() => void generate()}>提交批量任务</Button><Link to="/tasks">查看所有并行任务</Link></Space></Card>
+        {taskId && <Card title="任务进度与生成结果" className="panel-card" extra={<Link to={`/tasks/${taskId}`}>任务详情</Link>}>
+          <Progress percent={Math.round((task?.progress ?? 0) * 100)} status={task?.status === 'failed' || task?.status === 'partial_failed' ? 'exception' : task?.status === 'completed' ? 'success' : task && terminalStatuses.includes(task.status) ? 'normal' : 'active'} />
+          <Space wrap><Tag>{task?.status ?? 'queued'}</Tag><Typography.Text>成功 {task?.completed_jobs ?? 0} / {task?.total_jobs ?? 0}</Typography.Text><Typography.Text>失败 {task?.failed_jobs ?? 0} · 取消 {task?.cancelled_jobs ?? 0}</Typography.Text><Typography.Text>执行中 {task?.jobs.filter((job) => job.status === 'processing').length ?? 0} · 排队 {task?.jobs.filter((job) => job.status === 'pending').length ?? 0}</Typography.Text><Typography.Text>全局并发上限 {task?.max_concurrency ?? '—'}</Typography.Text><Typography.Text>预计 ¥{(task?.estimated_cost ?? 0).toFixed(2)}</Typography.Text></Space>
+          {taskError && <Alert type="error" message={taskError} />}
+          <div className="generated-results"><Button href={`/api/task/${taskId}/download`} disabled={!task?.jobs.some((job) => job.output_url && job.step.startsWith('custom_'))}>{task && !terminalStatuses.includes(task.status) ? '下载已生成图片 ZIP' : '全部下载 ZIP'}</Button><TaskResults jobs={task?.jobs ?? []} /></div>
+        </Card>}
+      </Col>
+    </Row>
+  </Layout.Content></Layout>
 }

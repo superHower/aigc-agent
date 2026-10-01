@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 import asyncio
 import os
+import json
+import tempfile
+import sqlite3
+from zipfile import ZipFile, ZIP_STORED
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -10,6 +14,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from openai import AsyncOpenAI
 
 from backend.config import Settings
@@ -31,6 +36,7 @@ from backend.models.schemas import (
     CompositeRequest,
     CompositeResponse,
     RetryRequest,
+    MultiImageRequest,
 )
 from backend.services.file_storage import save_source, validate_image_bytes
 from backend.services.image_editor import ImageEditor
@@ -41,6 +47,7 @@ from backend.services.ocr_service import OCRService
 from backend.services.prompt_builder import PromptContext, PromptType, build_prompt
 from backend.services.mask_generator import create_background_mask, create_mask
 from backend.services.compositor import CompositeError, compose_images
+from backend.services.multi_image import plan_multi_image, safe_stem
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -81,6 +88,7 @@ async def lifespan(app: FastAPI):
     app.state.registry = registry
     app.state.manager = manager
     app.state.analyzer = Analyzer(store, settings.data_dir, OCRService())
+    await manager.resume_active_tasks()
     try:
         yield
     finally:
@@ -118,8 +126,8 @@ async def health(request: Request):
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload(request: Request, files: list[UploadFile] = File(...)):
     current = state(request)
-    if len(files) > 16:
-        raise HTTPException(status_code=413, detail="at most 16 files can be uploaded")
+    if len(files) > 50:
+        raise HTTPException(status_code=413, detail="at most 50 files can be uploaded")
     result: list[UploadFileInfo] = []
     for upload_file in files:
         data = await upload_file.read()
@@ -336,6 +344,31 @@ async def generate_batch(payload: BatchRequest, request: Request):
     return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "source_count": len(source_jobs)}
 
 
+@app.post("/api/generate/multi-image")
+async def generate_multi_image(payload: MultiImageRequest, request: Request):
+    current = state(request)
+    file_ids = list(payload.source_ids)
+    if payload.reference_file_id:
+        file_ids.append(payload.reference_file_id)
+    sources = current.store.get_files(file_ids)
+    if any(file_id not in sources for file_id in file_ids):
+        raise HTTPException(status_code=404, detail="source or reference file not found")
+    analyses = {}
+    if payload.ocr_enabled:
+        for source_id in payload.source_ids:
+            cached = current.store.get_analysis(source_id)
+            if cached:
+                analyses[source_id] = AnalyzeResponse.model_validate_json('{"files":[' + cached + ']}').files[0]
+    try:
+        source_ids, jobs, source_jobs, rule = await asyncio.to_thread(plan_multi_image, payload, sources, analyses, current.settings.data_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    task_id = f"task_{uuid4().hex}"
+    current.store.create_batch(task_id, source_ids, rule, jobs)
+    await current.manager.create_batch(task_id, source_jobs, rule)
+    return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "estimated_cost": round(len(jobs) * 0.05, 2)}
+
+
 @app.post("/api/prompt/preview", response_model=PromptPreviewResponse)
 async def prompt_preview(payload: PromptPreviewRequest):
     try:
@@ -405,10 +438,16 @@ async def composite(payload: CompositeRequest, request: Request):
 
 def task_view(request: Request, task_id: str) -> TaskView:
     current = state(request)
-    task = current.store.get_task(task_id)
+    try:
+        task = current.store.get_task(task_id)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            raise HTTPException(status_code=503, detail="任务数据库尚未初始化，请重启后端") from exc
+        raise
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     jobs = current.store.get_jobs(task_id)
+    rule = json.loads(task["edit_rule"])
     views = []
     for job in jobs:
         output_url = (
@@ -422,6 +461,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
                 step=job["step"], target_id=job["target_id"], status=job["status"], retry_count=job["retry_count"],
                 cancel_requested=bool(job["cancel_requested"]), input_path=job["input_path"],
                 output_path=job["output_path"], output_url=output_url, error=job["error"],
+                output_filename=rule.get("outputs", {}).get(job["id"], {}).get("filename"),
                 created_at=job["created_at"], updated_at=job["updated_at"],
             )
         )
@@ -443,6 +483,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
         cancelled_jobs=sum(job.status == "cancelled" for job in views),
         progress=terminal_jobs / len(views) if views else 0,
         sources=sources, jobs=views, error=task["error"],
+        estimated_cost=round(len(jobs) * 0.05, 2), max_concurrency=current.settings.max_concurrency,
     )
 
 
@@ -461,6 +502,39 @@ async def list_tasks(request: Request, limit: int = 50, offset: int = 0):
         view = task_view(request, task["id"])
         items.append(view.model_dump(mode="json"))
     return {"items": items, "limit": limit, "offset": offset}
+
+
+@app.get("/api/task/{task_id}/download")
+async def download_task(task_id: str, request: Request):
+    current = state(request)
+    task = current.store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    outputs = json.loads(task["edit_rule"]).get("outputs", {})
+    jobs = [job for job in current.store.get_jobs(task_id) if job["status"] == "done" and job["output_path"] and (not outputs or outputs.get(job["id"], {}).get("variant"))]
+    if not jobs:
+        raise HTTPException(status_code=409, detail="暂无可下载的生成结果")
+
+    def make_archive():
+        descriptor, name = tempfile.mkstemp(suffix=".zip")
+        os.close(descriptor)
+        archive_path = Path(name)
+        try:
+            with ZipFile(archive_path, "w", compression=ZIP_STORED) as archive:
+                used_names = set()
+                for job in jobs:
+                    filename = outputs.get(job["id"], {}).get("filename", f"{job['id']}.png")
+                    if filename in used_names:
+                        filename = f"{safe_stem(filename)}-{job['id']}.png"
+                    used_names.add(filename)
+                    archive.write(job["output_path"], arcname=filename)
+            return archive_path
+        except Exception:
+            archive_path.unlink(missing_ok=True)
+            raise
+
+    archive_path = await asyncio.to_thread(make_archive)
+    return FileResponse(archive_path, media_type="application/zip", filename=f"{task_id}.zip", background=BackgroundTask(archive_path.unlink, missing_ok=True))
 
 
 @app.post("/api/task/{task_id}/retry")

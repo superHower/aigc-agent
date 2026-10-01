@@ -10,6 +10,7 @@ from backend.db.task_store import TaskStore
 from backend.services.image_editor import ImageEditor
 from backend.services.mask_generator import create_mask
 from PIL import Image
+from backend.services.multi_image import fit_output
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +141,10 @@ class TaskManager:
         task = self.store.get_task(task_id)
         if task is None:
             raise ValueError("task not found")
+        if task_id in self.running_tasks:
+            raise ValueError("task is already running")
         jobs = self.store.get_jobs(task_id)
-        selected = [job for job in jobs if job_id is None or job["id"] == job_id]
+        selected = [job for job in jobs if job["status"] in {"failed", "cancelled"} and (job_id is None or job["id"] == job_id)]
         if not selected:
             raise ValueError("job not found")
         if any(job["status"] in {"pending", "processing"} for job in selected):
@@ -151,7 +154,7 @@ class TaskManager:
         rule = json.loads(task["edit_rule"])
         source_jobs: dict[str, list[dict[str, str]]] = {}
         for job in jobs:
-            if job["status"] == "done" and job["id"] not in {item["id"] for item in selected}:
+            if not rule.get("multi_image") and job["status"] == "done" and job["id"] not in {item["id"] for item in selected}:
                 continue
             source_jobs.setdefault(job["source_id"], []).append(dict(job))
         self.store.reset_task_for_retry(task_id)
@@ -164,6 +167,26 @@ class TaskManager:
         self.running_tasks[task_id] = worker
         worker.add_done_callback(lambda _: self.running_tasks.pop(task_id, None))
 
+    async def resume_active_tasks(self) -> None:
+        """Resume queued tasks after a process restart.
+
+        Jobs that were in-flight are marked failed by the store recovery step.
+        Passing every job back to the source chain is intentional: completed
+        jobs are skipped while their output is used as the next chain input.
+        """
+        for task in self.store.list_active_tasks():
+            if task["id"] in self.running_tasks:
+                continue
+            jobs = self.store.get_jobs(task["id"])
+            if not jobs:
+                self.store.finalize_task(task["id"])
+                continue
+            rule = json.loads(task["edit_rule"])
+            source_jobs: dict[str, list[dict[str, str]]] = {}
+            for job in jobs:
+                source_jobs.setdefault(job["source_id"], []).append(dict(job))
+            await self.create_batch(task["id"], source_jobs, rule)
+
     async def _run_batch(self, task_id: str, source_jobs: dict[str, list[dict[str, str]]], rule: dict) -> None:
         self.store.set_task_status(task_id, "running")
         await asyncio.gather(*(self._run_source_chain(task_id, source_id, jobs, rule) for source_id, jobs in source_jobs.items()))
@@ -171,6 +194,30 @@ class TaskManager:
 
     async def _run_source_chain(self, task_id: str, source_id: str, jobs: list[dict[str, str]], rule: dict) -> None:
         current_input = Path(jobs[0]["input_path"]) if jobs else None
+        if rule.get("multi_image"):
+            variants = []
+            for job_data in jobs:
+                if rule.get("outputs", {}).get(job_data["id"], {}).get("variant"):
+                    variants.append(job_data)
+                    continue
+                job = self.store.get_job(job_data["id"])
+                if job and job["status"] == "done":
+                    current_input = Path(job["output_path"])
+                    continue
+                job_data["input_path"] = str(current_input)
+                await self._run_job_with_retries(task_id, job_data, rule)
+                completed = self.store.get_job(job_data["id"])
+                if completed is None or completed["status"] != "done":
+                    for remaining in jobs:
+                        stored = self.store.get_job(remaining["id"])
+                        if stored and stored["status"] == "pending":
+                            self.store.update_job(remaining["id"], status="cancelled" if completed and completed["status"] == "cancelled" else "failed", error="文字编辑前置步骤未完成")
+                    return
+                current_input = Path(completed["output_path"])
+            for variant in variants:
+                variant["input_path"] = str(current_input)
+            await asyncio.gather(*(self._run_job_with_retries(task_id, variant, rule) for variant in variants))
+            return
         for job_data in jobs:
             if current_input is not None:
                 job_data["input_path"] = str(current_input)
@@ -199,22 +246,29 @@ class TaskManager:
     async def _run_job_with_retries(self, task_id: str, job_data: dict[str, str], rule: dict) -> None:
         for attempt in range(self.max_retries + 1):
             job = self.store.get_job(job_data["id"])
-            if job is None:
+            if job is None or job["status"] == "done":
                 return
             if job["cancel_requested"]:
                 self.store.update_job(job_data["id"], status="cancelled")
                 return
-            self.store.update_job(job_data["id"], status="processing", retry_count=attempt, input_path=job_data["input_path"])
             try:
                 input_path = Path(job_data["input_path"])
-                mask_path = self._scaled_mask(Path(job_data["mask_path"]), input_path, job_data["id"])
                 async with self.api_semaphore:
+                    job = self.store.get_job(job_data["id"])
+                    if job and job["cancel_requested"]:
+                        self.store.update_job(job_data["id"], status="cancelled")
+                        return
+                    self.store.update_job(job_data["id"], status="processing", retry_count=attempt, input_path=str(input_path))
+                    mask_path = self._scaled_mask(Path(job_data["mask_path"]), input_path, job_data["id"])
+                    output_options = rule.get("outputs", {}).get(job_data["id"], {})
                     output_path, _ = await asyncio.wait_for(self.editor.edit(
                         job_id=job_data["id"], input_path=input_path, mask_path=mask_path,
-                        prompt=job_data["prompt"], size=rule["size"], quality=rule["quality"],
+                        prompt=job_data["prompt"], size=output_options.get("size", rule["size"]), quality=rule["quality"],
                         output_format=rule["output_format"], request_timeout=self.request_timeout,
                         reference_paths=[Path(path) for path in rule.get("reference_paths", [])],
                     ), timeout=self.job_timeout)
+                    if output_options.get("width"):
+                        await asyncio.to_thread(fit_output, output_path, output_options["width"], output_options["height"])
                 job = self.store.get_job(job_data["id"])
                 if job and job["cancel_requested"]:
                     self.store.update_job(job_data["id"], status="cancelled", error="cancelled_after_response")

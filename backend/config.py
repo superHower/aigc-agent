@@ -53,9 +53,9 @@ class Settings:
         if not base_url:
             raise RuntimeError("OPENAI_BASE_URL is not set")
 
-        max_concurrency = _int_env("MAX_CONCURRENCY", 3)
-        if not 1 <= max_concurrency <= 3:
-            raise RuntimeError("MAX_CONCURRENCY must be between 1 and 3")
+        max_concurrency = _int_env("MAX_CONCURRENCY", 10)
+        if not 1 <= max_concurrency <= 20:
+            raise RuntimeError("MAX_CONCURRENCY must be between 1 and 20")
 
         return cls(
             openai_api_key=api_key,
