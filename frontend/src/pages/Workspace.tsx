@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react'
-import { Alert, Button, Card, Checkbox, Col, Image, Input, Layout, Progress, Row, Select, Space, Switch, Tag, Typography, Upload, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Col, Image, Input, Layout, Popconfirm, Progress, Row, Select, Space, Switch, Tag, Typography, Upload, message } from 'antd'
 import { InboxOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import type { UploadProps } from 'antd'
-import { analyzeFiles, generateMultiImage, uploadFiles, type AnalysisFile, type UploadedFile } from '../api/client'
+import { analyzeFiles, cancelTask, generateMultiImage, uploadFiles, type AnalysisFile, type UploadedFile } from '../api/client'
 import { AnnotatedImage } from '../components/AnnotatedImage'
 import { TextBlockTable } from '../components/TextBlockTable'
 import { useTaskProgress } from '../hooks/useTaskProgress'
@@ -33,7 +33,7 @@ export function Workspace() {
   const [submitting, setSubmitting] = useState(false)
   const uploadInProgress = useRef(false)
   const [taskId, setTaskId] = useState<string | null>(() => sessionStorage.getItem('workspace-task-id'))
-  const { task, error: taskError } = useTaskProgress(taskId)
+  const { task, error: taskError, refresh: refreshTask } = useTaskProgress(taskId)
   const currentFile = files.find((file) => file.file_id === selectedFile) ?? files[0]
   const currentAnalysis = analysis.find((item) => item.file_id === currentFile?.file_id)
   const sourceIds = mode === 'shared' ? files.map((file) => file.file_id) : targets
@@ -90,6 +90,17 @@ export function Workspace() {
     finally { setSubmitting(false) }
   }
 
+  const cancelCurrentTask = async () => {
+    if (!taskId) return
+    try {
+      await cancelTask(taskId)
+      message.success('已请求取消本次任务')
+      refreshTask()
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : '取消任务失败')
+    }
+  }
+
   return <Layout className="app-shell"><AppHeader /><Layout.Content className="workspace-content">
     <Row gutter={[18, 18]}>
       <Col xs={24} lg={9}>
@@ -117,7 +128,7 @@ export function Workspace() {
         <Card className="panel-card"><Space wrap><Checkbox checked={rightsConfirmed} onChange={(event) => setRightsConfirmed(event.target.checked)}>我确认拥有素材使用权</Checkbox><Button type="primary" icon={<PlayCircleOutlined />} loading={submitting} disabled={!files.length || uploading || analyzing} onClick={() => void generate()}>提交批量任务</Button><Link to="/tasks">查看所有并行任务</Link></Space></Card>
         {taskId && <Card title="任务进度与生成结果" className="panel-card" extra={<Link to={`/tasks/${taskId}`}>任务详情</Link>}>
           <Progress percent={Math.round((task?.progress ?? 0) * 100)} status={task?.status === 'failed' || task?.status === 'partial_failed' ? 'exception' : task?.status === 'completed' ? 'success' : task && terminalStatuses.includes(task.status) ? 'normal' : 'active'} />
-          <Space wrap><Tag>{task?.status ?? 'queued'}</Tag><Typography.Text>成功 {task?.completed_jobs ?? 0} / {task?.total_jobs ?? 0}</Typography.Text><Typography.Text>失败 {task?.failed_jobs ?? 0} · 取消 {task?.cancelled_jobs ?? 0}</Typography.Text><Typography.Text>执行中 {task?.jobs.filter((job) => job.status === 'processing').length ?? 0} · 排队 {task?.jobs.filter((job) => job.status === 'pending').length ?? 0}</Typography.Text><Typography.Text>全局并发上限 {task?.max_concurrency ?? '—'}</Typography.Text><Typography.Text>预计 ¥{(task?.estimated_cost ?? 0).toFixed(2)}</Typography.Text></Space>
+          <Space wrap><Tag>{task?.status ?? 'queued'}</Tag><Typography.Text>成功 {task?.completed_jobs ?? 0} / {task?.total_jobs ?? 0}</Typography.Text><Typography.Text>失败 {task?.failed_jobs ?? 0} · 取消 {task?.cancelled_jobs ?? 0}</Typography.Text><Typography.Text>执行中 {task?.jobs.filter((job) => job.status === 'processing').length ?? 0} · 排队 {task?.jobs.filter((job) => job.status === 'pending').length ?? 0}</Typography.Text><Typography.Text>全局并发上限 {task?.max_concurrency ?? '—'}</Typography.Text><Typography.Text>预计 ¥{(task?.estimated_cost ?? 0).toFixed(2)}</Typography.Text><Popconfirm title="确定取消本次任务吗？" description="排队中的步骤会停止，正在执行的步骤可能在当前请求结束后停止。" okText="取消任务" cancelText="继续执行" onConfirm={() => void cancelCurrentTask()}><Button danger disabled={!taskId || !task || terminalStatuses.includes(task.status) || task.status === 'cancelling'}>{task?.status === 'cancelling' ? '正在取消…' : '取消本次任务'}</Button></Popconfirm></Space>
           {taskError && <Alert type="error" message={taskError} />}
           <div className="generated-results"><Button href={`/api/task/${taskId}/download`} disabled={!task?.jobs.some((job) => job.output_url && job.step.startsWith('custom_'))}>{task && !terminalStatuses.includes(task.status) ? '下载已生成图片 ZIP' : '全部下载 ZIP'}</Button><TaskResults jobs={task?.jobs ?? []} /></div>
         </Card>}
