@@ -5,11 +5,12 @@ const items = [
   { key: '/', label: '工作台' },
   { key: '/tasks', label: '任务历史' },
   { key: '/composite', label: '长图拼接' },
+  { key: '/prompts', label: '提示词管理' },
 ]
 
 export function AppHeader() {
   const location = useLocation()
-  const selectedKey = location.pathname.startsWith('/tasks') ? '/tasks' : location.pathname.startsWith('/composite') ? '/composite' : '/'
+  const selectedKey = items.find((item) => item.key !== '/' && location.pathname.startsWith(item.key))?.key ?? '/'
   return <Layout.Header className="app-header">
     <div className="brand-mark">ECOM IMAGE STUDIO</div>
     <Tag color="green">IMAGE EDITOR</Tag>

@@ -9,6 +9,7 @@ import { TextBlockTable } from '../components/TextBlockTable'
 import { useTaskProgress } from '../hooks/useTaskProgress'
 import { AppHeader } from '../components/AppHeader'
 import { TaskResults } from '../components/TaskResults'
+import { PromptTemplatePicker } from '../components/PromptTemplatePicker'
 
 const ratioOptions = [{ label: '原比例', value: 'original' }, { label: '1:1', value: '1:1' }, { label: '3:4', value: '3:4' }, { label: '16:9', value: '16:9' }]
 const terminalStatuses = ['completed', 'partial_failed', 'failed', 'cancelled']
@@ -115,7 +116,7 @@ export function Workspace() {
       <Col xs={24} lg={15}>
         <Card title="2. 批量生成模式" className="panel-card">
           <Select value={mode} disabled={uploading || analyzing} style={{ width: '100%' }} options={[{ value: 'shared', label: '多图 · 同一个通用提示词' }, { value: 'reference', label: '参考图组合 · 批量替换指定内容' }]} onChange={(value) => { setMode(value); if (value === 'reference') setOcrEnabled(false) }} />
-          {mode === 'shared' ? <div className="option-card"><Typography.Title level={5}>通用提示词</Typography.Title><Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="所有图片独立执行此规则，例如：将背景改为干净的白色摄影棚，保持产品和文字不变。" autoSize={{ minRows: 4, maxRows: 10 }} /></div> : <Space direction="vertical" className="page-stack option-card"><Typography.Text>请把以下待处理图片的指定内容换成参考图的，其他内容不变。</Typography.Text><Select mode="multiple" style={{ width: '100%' }} value={targets} onChange={setTargets} placeholder="选择待处理图片，例如图二、图三、图四" options={fileOptions.filter((option) => option.value !== referenceId)} /><Input value={component} onChange={(event) => setComponent(event.target.value)} placeholder="要替换的内容，例如背景" /><Select style={{ width: '100%' }} value={referenceId} onChange={(value) => { setReferenceId(value); setTargets((previous) => previous.filter((id) => id !== value)) }} placeholder="选择参考图片，例如图一" options={fileOptions} /><Alert type="info" message="每张待处理图只与所选参考图组合，不启用 OCR；参考图本身不生成结果。" /></Space>}
+          {mode === 'shared' ? <div className="option-card"><Typography.Title level={5}>通用提示词</Typography.Title><PromptTemplatePicker value={prompt} onChange={setPrompt} /><Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="所有图片独立执行此规则，例如：将背景改为干净的白色摄影棚，保持产品和文字不变。" autoSize={{ minRows: 4, maxRows: 10 }} /></div> : <Space direction="vertical" className="page-stack option-card"><Typography.Text>请把以下待处理图片的指定内容换成参考图的，其他内容不变。</Typography.Text><Select mode="multiple" style={{ width: '100%' }} value={targets} onChange={setTargets} placeholder="选择待处理图片，例如图二、图三、图四" options={fileOptions.filter((option) => option.value !== referenceId)} /><Input value={component} onChange={(event) => setComponent(event.target.value)} placeholder="要替换的内容，例如背景" /><Select style={{ width: '100%' }} value={referenceId} onChange={(value) => { setReferenceId(value); setTargets((previous) => previous.filter((id) => id !== value)) }} placeholder="选择参考图片，例如图一" options={fileOptions} /><Alert type="info" message="每张待处理图只与所选参考图组合，不启用 OCR；参考图本身不生成结果。" /></Space>}
           <Space direction="vertical" size="middle" className="page-stack">
             <Typography.Text strong>输出比例（每种比例生成一张，独立处理）</Typography.Text>
             <Checkbox.Group options={ratioOptions} value={ratios} onChange={(values) => setRatios(values.map(String))} />

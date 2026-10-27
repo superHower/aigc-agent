@@ -2,6 +2,20 @@ import axios from 'axios'
 
 export const api = axios.create({ baseURL: '/api', timeout: 120_000 })
 
+export type PromptCategory = { id: string; name: string; created_at: string }
+export type PromptTemplate = { id: string; name: string; content: string; category_id: string | null; created_at: string; updated_at: string }
+export type PromptTemplateInput = Pick<PromptTemplate, 'name' | 'content' | 'category_id'>
+export async function listPromptCategories() { return (await api.get<{ items: PromptCategory[] }>('/prompt-categories')).data.items }
+export async function savePromptCategory(name: string, id?: string) { return (await (id ? api.put<PromptCategory>(`/prompt-categories/${id}`, { name }) : api.post<PromptCategory>('/prompt-categories', { name }))).data }
+export async function deletePromptCategory(id: string) { await api.delete(`/prompt-categories/${id}`) }
+export async function listPromptTemplates() { return (await api.get<{ items: PromptTemplate[] }>('/prompt-templates')).data.items }
+export async function savePromptTemplate(payload: PromptTemplateInput, id?: string) { return (await (id ? api.put<PromptTemplate>(`/prompt-templates/${id}`, payload) : api.post<PromptTemplate>('/prompt-templates', payload))).data }
+export async function deletePromptTemplate(id: string) { await api.delete(`/prompt-templates/${id}`) }
+export function promptError(reason: unknown) {
+  if (axios.isAxiosError(reason) && typeof reason.response?.data?.detail === 'string') return reason.response.data.detail
+  return '操作失败，请稍后重试'
+}
+
 export type UploadedFile = { file_id: string; filename: string; url: string; width: number; height: number; size: number; content_type: string }
 export type TextBlock = { id: string; bbox: [number, number, number, number]; position: string; original: string; confidence: number | null; mask_url: string }
 export type AnalysisFile = { file_id: string; width: number; height: number; thumbnail_url: string | null; text_blocks: TextBlock[]; logo_blocks: unknown[]; error: string | null }

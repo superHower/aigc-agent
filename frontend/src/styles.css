@@ -22,6 +22,8 @@ body { margin: 0; min-width: 320px; }
 .prompt-collapse { margin: 18px 0; }
 .prompt-list { width: 100%; }
 .prompt-list .ant-card { background: #fafbfc; }
+.prompt-preview { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; background: #fafbfc; border-radius: 8px; }
+.prompt-name { max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; padding: 0; text-align: left; }
 .uploaded-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
 .uploaded-item { cursor: pointer; padding: 4px; border: 1px solid #e5e7eb; border-radius: 8px; text-align: center; background: #fafafa; }
 .uploaded-item img { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 5px; background: #f0f2f5; }

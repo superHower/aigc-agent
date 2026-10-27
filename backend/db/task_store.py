@@ -37,6 +37,20 @@ class TaskStore:
                     size INTEGER NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS prompt_categories (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS prompt_templates (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    category_id TEXT REFERENCES prompt_categories(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates(category_id);
                 CREATE TABLE IF NOT EXISTS analyses (
                     file_id TEXT PRIMARY KEY,
                     result TEXT NOT NULL,

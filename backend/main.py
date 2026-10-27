@@ -18,6 +18,7 @@ from starlette.background import BackgroundTask
 from openai import AsyncOpenAI
 
 from backend.config import Settings
+from backend.routes.prompts import router as prompts_router
 from backend.db.task_store import TaskStore, utc_now
 from backend.models.schemas import (
     AnalyzeRequest,
@@ -96,6 +97,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ECOM IMAGE STUDIO", version="0.1.0", lifespan=lifespan)
+app.include_router(prompts_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
