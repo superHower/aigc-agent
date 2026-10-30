@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Empty, Space, Table, Tag, Typography, message } from 'antd'
+import { Button, Card, Empty, Table, Tag, Typography, message } from 'antd'
 import { Link } from 'react-router-dom'
 import { listTasks, type Task } from '../api/client'
 import { AppHeader } from '../components/AppHeader'
@@ -24,7 +24,7 @@ export function Tasks() {
     void poll()
     return () => { active = false; if (timer) window.clearTimeout(timer) }
   }, [])
-  return <div className="app-shell"><AppHeader /><main className="workspace-content"><Card title="任务历史" extra={<Space><Link to="/workspace"><Button>返回工作台</Button></Link><Link to="/composite"><Button type="primary">长图拼接</Button></Link></Space>}>
+  return <div className="app-shell"><AppHeader /><main className="workspace-content"><Card title="任务历史" extra={<Link to="/workspace"><Button>返回工作台</Button></Link>}>
     {tasks.length ? <Table rowKey="id" dataSource={tasks} pagination={false} columns={[
       { title: '任务 ID', dataIndex: 'id', ellipsis: true, render: (id: string) => <Link to={`/tasks/${id}`}>{id}</Link> },
       { title: '状态', dataIndex: 'status', render: (status: string) => <Tag color={colors[status]}>{status}</Tag> },

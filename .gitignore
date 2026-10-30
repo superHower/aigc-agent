@@ -6,6 +6,9 @@ __pycache__/
 .pytest_cache/
 backend/media/
 backend/data/*.db*
+backend/backups/
+backend/*.log
+frontend/*.log
 .DS_Store
 img
 media

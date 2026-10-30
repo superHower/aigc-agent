@@ -88,8 +88,9 @@ export function Dashboard() {
   const [usage, setUsage] = useState<{ summary: { current_available: number; current_frozen: number; consumed: number }; membership: { active: boolean; expires_at: string | null; concurrency: number } }>()
   const date = selectedDate.format('YYYY-MM-DD')
   useEffect(() => {
+    if (isAdmin) return
     api.get('/account/usage', { params: { period, selected_date: date, timezone_offset: selectedDate.toDate().getTimezoneOffset() } }).then(r => setUsage(r.data)).catch(() => {})
-  }, [period, date, revision])
+  }, [period, date, revision, isAdmin])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -303,7 +304,7 @@ export function Dashboard() {
             style={{ marginBottom: 18 }}
           />
         )}
-        <Card style={{ marginBottom: 18 }}><Space size="large" wrap><Statistic title="可用积分" value={usage?.summary.current_available ?? 0} /><Statistic title="冻结积分" value={usage?.summary.current_frozen ?? 0} /><Statistic title="本期消耗积分" value={usage?.summary.consumed ?? 0} /><Typography.Text>{usage?.membership.active ? '会员' : '普通用户'} · 并发 {usage?.membership.concurrency ?? 1} · {usage?.membership.expires_at ? `到期 ${new Date(usage.membership.expires_at).toLocaleString()}` : '未开通会员'}</Typography.Text>{isAdmin && <Link to="/admin">经营总览与实际调用成本</Link>}</Space></Card>
+        {!isAdmin && <Card style={{ marginBottom: 18 }}><Space size="large" wrap><Statistic title="可用积分" value={usage?.summary.current_available ?? 0} /><Statistic title="冻结积分" value={usage?.summary.current_frozen ?? 0} /><Statistic title="本期消耗积分" value={usage?.summary.consumed ?? 0} /><Typography.Text>{usage?.membership.active ? '会员' : '普通用户'} · 并发 {usage?.membership.concurrency ?? 1} · {usage?.membership.expires_at ? `到期 ${new Date(usage.membership.expires_at).toLocaleString()}` : '未开通会员'}</Typography.Text></Space></Card>}
         {loading && !data ? (
           <Card className="panel-card">
             <Skeleton active paragraph={{ rows: 8 }} />

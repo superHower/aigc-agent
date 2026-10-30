@@ -1,8 +1,8 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Workspace } from './pages/Workspace'
 import { Tasks } from './pages/Tasks'
 import { TaskDetail } from './pages/TaskDetail'
-import { Composite } from './pages/Composite'
+import type { ReactNode } from 'react'
 import { Prompts } from './pages/Prompts'
 import { Channels } from './pages/Channels'
 import { lazy, Suspense } from 'react'
@@ -15,18 +15,26 @@ import { Packages } from './pages/Packages'
 import { Orders, OrderDetail } from './pages/Orders'
 import { PaymentSettings } from './pages/PaymentSettings'
 import { Users } from './pages/Users'
-import { AuthProvider, RequireAuth } from './components/AuthProvider'
+import { AuthProvider, RequireAuth, useAuth } from './components/AuthProvider'
 
 const Dashboard = lazy(() =>
   import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })),
 )
 const Operations = lazy(() => import('./pages/Operations').then(m => ({ default: m.Operations })))
 const OperationRecords = lazy(() => import('./pages/Operations').then(m => ({ default: m.OperationRecords })))
+function Home() {
+  return <Suspense fallback={<Spin fullscreen />}><Dashboard /></Suspense>
+}
+function AppFrame({ children }: { children: ReactNode }) {
+  const { user } = useAuth()
+  return <div className={user?.role === 'admin' ? 'admin-layout' : undefined}>{children}</div>
+}
 
 export function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+      <AppFrame>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<PhoneAuth />} />
@@ -35,9 +43,7 @@ export function App() {
         <Route
           path="/"
           element={
-            <Suspense fallback={<Spin fullscreen />}>
-              <Dashboard />
-            </Suspense>
+            <Home />
           }
         />
         <Route path="/workspace" element={<Workspace />} />
@@ -56,12 +62,13 @@ export function App() {
         <Route element={<RequireAuth admin />}><Route path="/admin/packages" element={<Packages />} /></Route>
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tasks/:id" element={<TaskDetail />} />
-        <Route path="/composite" element={<Composite />} />
+        <Route path="/composite" element={<Navigate to="/" replace />} />
         <Route path="/prompts" element={<Prompts />} />
         <Route element={<RequireAuth admin />}><Route path="/channels" element={<Channels />} /></Route>
         <Route path="*" element={<Workspace />} />
         </Route>
       </Routes>
+      </AppFrame>
       </AuthProvider>
     </BrowserRouter>
   )

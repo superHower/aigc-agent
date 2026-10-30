@@ -78,6 +78,12 @@ docker compose down
 
 Windows 不需要安装 Conda、Python、Node.js 或 PaddleOCR；这些依赖都在 Docker 容器中安装。
 
+#### Windows 本机一键启动
+
+双击根目录 `启动项目和隧道.bat`，或在项目根目录运行 `powershell -ExecutionPolicy Bypass -File scripts/start-all.ps1`。启动器读取 `.env` 的 NATAPP_AUTHTOKEN，使用用户目录 natapp.exe（可用 NATAPP_EXE 指定路径），输出当前公网地址，再检查并启动 8000 后端和 5173 前端，打开本机页面。已有进程不会重复启动；代码更新后需要先停止对应项目进程再启动。natapp 免费域名可能变化，以本次输出及 backend/natapp.log 为准。不要同时运行桌面旧隧道批处理或 Docker 隧道，以免同一 token 冲突。
+
+仅启动项目：`powershell -ExecutionPolicy Bypass -File scripts/start-local.ps1`；仅启动隧道：`.venv\Scripts\python.exe scripts/start-natapp.py`。前后端日志位于 backend/dev.*.log、frontend/dev.*.log。本机测试账户资料存于忽略提交的 secrets/local-test-accounts.json，勿公开该文件。
+
 #### NATAPP 内网穿透自动启动
 
 在项目根目录 `.env` 中设置 `NATAPP_AUTHTOKEN=你的隧道token`，然后执行 `docker compose up --build -d`，项目和隧道会一起启动，不再需要双击桌面的 `内网隧穿.bat`。本机已从该批处理迁移 token；真实 token 仅保存在不提交 Git 的 `.env` 中。

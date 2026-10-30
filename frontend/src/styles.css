@@ -96,6 +96,20 @@ body {
   color: #0071e3;
   background: #e8f1fb;
 }
+.header-account { display: flex; align-items: center; gap: 8px; flex-shrink: 0; line-height: normal; }
+.header-credit { color: #0071e3; font-size: 13px; white-space: nowrap; }
+.header-username { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.management-active { color: #0071e3; background: #e8f1fb; border-color: #d6e7fa; }
+.account-popover { min-width: 240px; max-width: 320px; }
+.account-popover p { margin: 12px 0; font-size: 13px; }
+.account-popover-footer { border-top: 1px solid #eee; margin-top: 12px; padding-top: 12px; }
+@media (max-width: 900px) {
+  .app-header .brand-mark { order: 0; }
+  .header-account { order: 1; margin-left: auto; gap: 4px; }
+  .app-header .app-nav { order: 2; flex-basis: 100%; }
+  .app-header { flex-wrap: wrap; height: auto; padding-top: 10px; padding-bottom: 6px; gap: 8px; }
+  .header-username { max-width: 140px; }
+}
 @supports (backdrop-filter: blur(20px)) {
   .app-header {
     background: rgba(251, 251, 253, 0.84);
@@ -549,4 +563,28 @@ body {
   .app-nav-link {
     transition: none;
   }
+}
+
+/* Administrator shell: persistent navigation at left, account controls above content. */
+.admin-layout { --sidebar-width: 220px; }
+.admin-layout .app-shell { margin-left: var(--sidebar-width); }
+.admin-sidebar { position: fixed; inset: 0 auto 0 0; width: var(--sidebar-width); z-index: 110; background: #fbfbfc; border-right: 1px solid #e7e7ec; overflow-y: auto; }
+.sidebar-brand { display: flex; height: 68px; padding: 0 22px; font-size: 16px; }
+.admin-sidebar-nav { display: flex; flex-direction: column; gap: 5px; padding: 16px 12px; }
+.admin-sidebar-link { color: #515154; padding: 11px 18px; border-radius: 9px; font-size: 14px; line-height: 22px; }
+.admin-sidebar-link:hover { background: #eeeef1; color: #1d1d1f; }
+.admin-sidebar-link-active { color: #0071e3; background: #e8f1fb; font-weight: 600; }
+.admin-layout .admin-header { padding: 0 28px; flex-wrap: nowrap; height: 68px; gap: 12px; }
+.admin-header .header-account { margin-left: auto; }
+.admin-sidebar-toggle { display: none; }
+.admin-layout .workspace-content { min-width: 0; }
+@media (max-width: 900px) {
+  .admin-layout .app-shell { margin-left: 0; }
+  .admin-sidebar { display: none; }
+  .admin-sidebar-toggle { display: inline-flex; }
+  .admin-layout .admin-header { padding: 10px 16px 6px; flex-wrap: wrap; height: auto; gap: 8px; }
+  .admin-header .admin-sidebar-toggle { order: 0; }
+}
+@media (max-width: 480px) {
+  .admin-header .header-username { max-width: 110px; }
 }
