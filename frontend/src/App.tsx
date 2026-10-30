@@ -10,6 +10,10 @@ import { Spin } from 'antd'
 import { Login } from './pages/Login'
 import { PhoneAuth } from './pages/PhoneAuth'
 import { Credits } from './pages/Credits'
+import { Membership } from './pages/Membership'
+import { Packages } from './pages/Packages'
+import { Orders, OrderDetail } from './pages/Orders'
+import { PaymentSettings } from './pages/PaymentSettings'
 import { AuthProvider, RequireAuth } from './components/AuthProvider'
 
 const Dashboard = lazy(() =>
@@ -35,6 +39,14 @@ export function App() {
         />
         <Route path="/workspace" element={<Workspace />} />
         <Route path="/account/credits" element={<Credits />} />
+        <Route path="/account/membership" element={<Membership />} />
+        <Route path="/orders" element={<Orders />} />
+        <Route path="/orders/:id" element={<OrderDetail />} />
+        <Route element={<RequireAuth admin />}>
+          <Route path="/admin/orders" element={<Orders admin />} />
+          <Route path="/admin/payment-settings" element={<PaymentSettings />} />
+        </Route>
+        <Route element={<RequireAuth admin />}><Route path="/admin/packages" element={<Packages />} /></Route>
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/composite" element={<Composite />} />

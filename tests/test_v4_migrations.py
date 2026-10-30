@@ -32,7 +32,7 @@ def test_upgrade_old_database_and_one_time_admin(tmp_path):
     TaskStore(path)
     assert validate(store)['ok']
     with store.transaction() as db:
-        assert [r[0] for r in db.execute('SELECT version FROM schema_migrations ORDER BY version')] == [1, 2, 3, 4]
+        assert [r[0] for r in db.execute('SELECT version FROM schema_migrations ORDER BY version')] == [1, 2, 3, 4, 5, 6]
         assert db.execute('SELECT owner_id FROM analyses').fetchone()[0] == owner
         encoded = db.execute('SELECT password_hash FROM users').fetchone()[0]
         assert verify_password('test-password-123', encoded)
@@ -125,12 +125,16 @@ def test_postgres_migration_import_transactions_and_existing_queries(postgres_st
     legacy_database(source)
     old = TaskStore(source)
     bootstrap_admin(old, 'admin', 'test-password-123')
+    with old.transaction() as db:
+        db.execute("UPDATE packages SET price_cents=800,status='active',updated_at=? WHERE id='credits30'", (utc_now(),))
     channels = ChannelStore(old)
     channels.save(ChannelInput(name='local', model='model', base_url='http://localhost:9999', api_key='test-key'))
     ChannelStore(postgres_store)
     import_sqlite(source, postgres_store)
     import_sqlite(source, postgres_store)
     assert validate(postgres_store)['ok']
+    with postgres_store.transaction() as db:
+        assert db.execute("SELECT price_cents FROM packages WHERE id='credits30'").fetchone()[0] == 800
     assert ChannelStore(postgres_store).list()[0]['name'] == 'local'
     assert dashboard_stats(postgres_store, 'day', date.today(), 0)['summary']['tasks'] == 0
     from fastapi import FastAPI

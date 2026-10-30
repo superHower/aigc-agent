@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -157,8 +158,8 @@ class ChannelPool:
             connection.execute("UPDATE channels SET last_error = ? WHERE id = ? AND updated_at = ?",
                                (runtime.error, runtime.config["id"], runtime.config["updated_at"]))
 
-    async def edit(self, runtime: ChannelRuntime, on_start=None, **kwargs):
-        async with runtime.semaphore:
+    async def edit(self, runtime: ChannelRuntime, on_start=None, capacity_reserved=False, **kwargs):
+        async with (nullcontext() if capacity_reserved else runtime.semaphore):
             if runtime.broken.is_set():
                 raise ChannelUnavailable(runtime.error)
             if on_start is not None and not on_start():

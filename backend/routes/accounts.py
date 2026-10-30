@@ -2,8 +2,15 @@ from fastapi import APIRouter, HTTPException, Request
 
 from backend.services.access import current_user
 from backend.services.credits import balance
+from backend.services.membership import status
 
 router = APIRouter(prefix='/api/account', tags=['account'])
+
+
+@router.get('/membership')
+def membership(request: Request):
+    settings = request.app.state.settings
+    return status(request.app.state.store, current_user(request)['id'], getattr(settings, 'ordinary_concurrency', 1), getattr(settings, 'member_concurrency', 3))
 
 
 @router.get('/credits')

@@ -130,6 +130,88 @@ def migrate(store):
                 for operation in ('UPDATE', 'DELETE'):
                     db.execute(f"CREATE TRIGGER credit_entries_no_{operation.lower()} BEFORE {operation} ON credit_entries BEGIN SELECT RAISE(ABORT, 'credit entries are append only'); END")
             stamp(db, 4)
+        if 5 not in applied:
+            db.executescript('''
+                CREATE TABLE packages (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind IN ('credits','membership')),
+                    price_cents INTEGER NOT NULL CHECK(price_cents>0),
+                    credits INTEGER NOT NULL CHECK(credits>0),
+                    membership_days INTEGER NOT NULL CHECK(membership_days>=0),
+                    status TEXT NOT NULL CHECK(status IN ('draft','active','inactive')),
+                    sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    CHECK((kind='credits' AND membership_days=0) OR (kind='membership' AND membership_days>0))
+                );
+                CREATE TABLE membership_entries (
+                    business_key TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                    days INTEGER NOT NULL CHECK(days>0), previous_expires_at TEXT,
+                    expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+            ''')
+            from backend.db.task_store import utc_now
+            # Stable seed snapshots allow verification during SQLite -> PostgreSQL import.
+            now = '2026-10-29T00:00:00+00:00'
+            for ident, name, kind, price, amount, days, order in (
+                ('credits30', '30 积分包', 'credits', 600, 30, 0, 0),
+                ('credits120', '120 积分包', 'credits', 1800, 120, 0, 1),
+                ('weekly', '会员周卡', 'membership', 1200, 100, 7, 2),
+                ('monthly', '会员月卡', 'membership', 3600, 360, 30, 3),
+            ):
+                db.execute("INSERT INTO packages VALUES (?,?,?,?,?,?, 'draft',?,?,?)", (ident, name, kind, price, amount, days, order, now, now))
+            stamp(db, 5)
+        if 6 not in applied:
+            db.executescript('''
+                CREATE TABLE payment_assets (
+                    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id),
+                    purpose TEXT NOT NULL CHECK(purpose IN ('payment_code','evidence')),
+                    path TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE payment_codes (
+                    id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES payment_assets(id),
+                    channel TEXT NOT NULL, instructions TEXT NOT NULL,
+                    active INTEGER NOT NULL CHECK(active IN (0,1)), created_at TEXT NOT NULL, disabled_at TEXT
+                );
+                CREATE UNIQUE INDEX idx_payment_code_active ON payment_codes(active) WHERE active=1;
+                CREATE TABLE orders (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                    package_id TEXT NOT NULL REFERENCES packages(id), package_name TEXT NOT NULL,
+                    price_cents INTEGER NOT NULL CHECK(price_cents>0), credits INTEGER NOT NULL CHECK(credits>0),
+                    membership_days INTEGER NOT NULL CHECK(membership_days>=0),
+                    payment_code_id TEXT NOT NULL REFERENCES payment_codes(id),
+                    status TEXT NOT NULL CHECK(status IN ('pending','review','needs_info','cancelled','credited')),
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, credited_at TEXT
+                );
+                CREATE INDEX idx_orders_owner ON orders(user_id,created_at);
+                CREATE INDEX idx_orders_review ON orders(status,created_at);
+                CREATE TABLE order_evidence (
+                    id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id),
+                    declared_transaction TEXT NOT NULL, paid_at TEXT NOT NULL,
+                    asset_id TEXT REFERENCES payment_assets(id), note TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE payment_receipts (
+                    id TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE REFERENCES orders(id),
+                    channel TEXT NOT NULL, verified_transaction TEXT NOT NULL,
+                    amount_cents INTEGER NOT NULL CHECK(amount_cents>0),
+                    actor_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL,
+                    UNIQUE(channel,verified_transaction)
+                );
+                CREATE TABLE order_reviews (
+                    id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id),
+                    actor_id TEXT NOT NULL REFERENCES users(id), action TEXT NOT NULL,
+                    reason TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE financial_requests (
+                    actor_id TEXT NOT NULL REFERENCES users(id), operation TEXT NOT NULL, key TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL, result_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(actor_id,operation,key)
+                );
+                CREATE TABLE credit_adjustments (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                    actor_id TEXT NOT NULL REFERENCES users(id), amount INTEGER NOT NULL CHECK(amount<>0),
+                    reason TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+            ''')
+            stamp(db, 6)
 
 
 def stamp(db, version):

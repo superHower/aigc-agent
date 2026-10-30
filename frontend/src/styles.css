@@ -67,6 +67,9 @@ body {
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 .app-nav {
+  min-width: 0;
+  overflow-x: auto;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 5px;

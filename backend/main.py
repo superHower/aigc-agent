@@ -26,6 +26,8 @@ from backend.routes.dashboard import router as dashboard_router
 from backend.routes.auth import router as auth_router, account, csrf_valid
 from backend.routes.admin import router as admin_router
 from backend.routes.accounts import router as accounts_router
+from backend.routes.packages import router as packages_router
+from backend.routes.orders import router as orders_router
 from backend.services import credits
 from backend.services.access import current_user, require_file, require_task, visible_job
 from backend.services.channels import ChannelStore, ChannelPool
@@ -102,6 +104,8 @@ async def lifespan(app: FastAPI):
         settings.max_retries,
         settings.max_concurrency,
         channel_pool=channel_pool,
+        ordinary_concurrency=settings.ordinary_concurrency,
+        member_concurrency=settings.member_concurrency,
     )
     app.state.settings = settings
     app.state.store = store
@@ -127,6 +131,8 @@ app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(accounts_router)
+app.include_router(packages_router)
+app.include_router(orders_router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -140,6 +146,8 @@ async def migration_access(request: Request, call_next):
     if path.startswith('/api/') and request.method != 'OPTIONS':
         if path == '/api/health':
             return JSONResponse({'status': 'ok'})
+        if path == '/api/packages' and request.method == 'GET':
+            return await call_next(request)
         if path in ('/api/auth/login', '/api/auth/sms', '/api/auth/register', '/api/auth/reset-password'):
             origin = request.headers.get('origin')
             allowed = os.getenv('FRONTEND_ORIGINS', 'http://localhost:5173').split(',')

@@ -44,6 +44,8 @@ class Settings:
     database_path: Path
     database_url: str | None = None
     frontend_origins: tuple[str, ...] = ()
+    ordinary_concurrency: int = 1
+    member_concurrency: int = 3
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -55,6 +57,10 @@ class Settings:
         max_concurrency = _int_env("MAX_CONCURRENCY", 10)
         if not 1 <= max_concurrency <= 20:
             raise RuntimeError("MAX_CONCURRENCY must be between 1 and 20")
+        ordinary = _int_env('USER_CONCURRENCY', 1)
+        member = _int_env('MEMBER_CONCURRENCY', 3)
+        if not 1 <= ordinary <= member <= 20:
+            raise RuntimeError('Concurrency must satisfy 1 <= USER_CONCURRENCY <= MEMBER_CONCURRENCY <= 20')
 
         return cls(
             openai_api_key=api_key,
@@ -62,6 +68,8 @@ class Settings:
             model_edit=os.getenv("MODEL_EDIT", "gpt-image-2.5-sunburst"),
             model_draft=os.getenv("MODEL_DRAFT", "gpt-image-2.5-flare"),
             max_concurrency=max_concurrency,
+            ordinary_concurrency=ordinary,
+            member_concurrency=member,
             request_timeout=_float_env("REQUEST_TIMEOUT", 300),
             job_timeout=_float_env("JOB_TIMEOUT", 360),
             max_retries=_int_env("MAX_RETRIES", 2),

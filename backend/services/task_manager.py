@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import nullcontext
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +13,7 @@ from PIL import Image
 from backend.services.multi_image import fit_output
 from backend.services.channels import ChannelPool, ChannelUnavailable
 from backend.services import credits
+from backend.services.admission import Admission
 from backend.db.task_store import utc_now
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ async def _join_jobs(coroutines) -> None:
 
 
 class TaskManager:
-    def __init__(self, store: TaskStore, editor: ImageEditor, data_dir: Path, request_timeout: float, job_timeout: float, max_retries: int, max_concurrency: int = 3, channel_pool: ChannelPool | None = None) -> None:
+    def __init__(self, store: TaskStore, editor: ImageEditor, data_dir: Path, request_timeout: float, job_timeout: float, max_retries: int, max_concurrency: int = 3, channel_pool: ChannelPool | None = None, ordinary_concurrency: int = 1, member_concurrency: int = 3) -> None:
         self.store = store
         self.editor = editor
         self.data_dir = data_dir
@@ -39,7 +39,7 @@ class TaskManager:
         self.running_tasks: dict[str, asyncio.Task[None]] = {}
         self.channel_pool = channel_pool
         self.assignments: dict[str, dict] = {}
-        self.user_semaphores: dict[str, asyncio.Semaphore] = {}
+        self.admission = Admission(store, ordinary_concurrency, member_concurrency)
 
     async def create_single_job(
         self,
@@ -322,14 +322,7 @@ class TaskManager:
             return scaled
 
     async def _run_job_with_retries(self, task_id: str, job_data: dict[str, str], rule: dict) -> None:
-        task = self.store.get_task(task_id)
-        if task and task['billable']:
-            # Conservative cross-task limit until membership quotas arrive in P3.
-            semaphore = self.user_semaphores.setdefault(task['owner_id'], asyncio.Semaphore(1))
-            async with semaphore:
-                await self._execute_job(task_id, job_data, rule)
-        else:
-            await self._execute_job(task_id, job_data, rule)
+        await self._execute_job(task_id, job_data, rule)
 
     async def _execute_job(self, task_id: str, job_data: dict[str, str], rule: dict) -> None:
         runtime = self.assignments.get(task_id, {}).get(job_data["id"])
@@ -349,7 +342,10 @@ class TaskManager:
                 return
             try:
                 input_path = Path(job_data["input_path"])
-                async with (self.api_semaphore if runtime is None else nullcontext()):
+                task = self.store.get_task(task_id)
+                owner = task['owner_id'] if task and task['billable'] else None
+                capacity = runtime.semaphore if runtime else self.api_semaphore
+                async with self.admission.slot(owner, capacity, runtime):
                     job = self.store.get_job(job_data["id"])
                     if job and job["cancel_requested"]:
                         self.store.update_job(job_data["id"], status="cancelled")
@@ -377,7 +373,7 @@ class TaskManager:
                             return
                     mask_path = self._scaled_mask(Path(job_data["mask_path"]), input_path, job_data["id"])
                     output_options = rule.get("outputs", {}).get(job_data["id"], {})
-                    edit = self.editor.edit if runtime is None else lambda **kwargs: self.channel_pool.edit(runtime, on_start=mark_processing, **kwargs)
+                    edit = self.editor.edit if runtime is None else lambda **kwargs: self.channel_pool.edit(runtime, on_start=mark_processing, capacity_reserved=True, **kwargs)
                     output_path, _ = await asyncio.wait_for(edit(
                         job_id=job_data["id"], input_path=input_path, mask_path=mask_path,
                         prompt=job_data["prompt"], size=output_options.get("size", rule["size"]), quality=rule["quality"],

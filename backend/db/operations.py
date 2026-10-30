@@ -55,6 +55,7 @@ def validate(store, media_dir=None):
             report['foreign_key_errors'] = [tuple(r) for r in db.execute('PRAGMA foreign_key_check')]
         if media_dir is not None:
             paths = [r['path'] for r in db.execute('SELECT path FROM files')]
+            paths += [r['path'] for r in db.execute('SELECT path FROM payment_assets')]
             paths += [r['input_path'] for r in db.execute("SELECT input_path FROM jobs WHERE input_path != ''")]
             paths += [r['output_path'] for r in db.execute("SELECT output_path FROM jobs WHERE output_path != ''")]
             paths += [r['mask_path'] for r in db.execute("SELECT mask_path FROM jobs WHERE mask_path IS NOT NULL AND mask_path != ''")]
@@ -124,6 +125,9 @@ def restore(source: Path, database: Path, media: Path):
         return value
 
     with sqlite3.connect(database) as db:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='payment_assets'").fetchone():
+            for asset_id, path in db.execute('SELECT id,path FROM payment_assets').fetchall():
+                db.execute('UPDATE payment_assets SET path=? WHERE id=?', (relocate(path), asset_id))
         for table, key, fields in (
             ('files', 'id', ('path',)),
             ('jobs', 'id', ('input_path', 'output_path', 'mask_path')),
@@ -147,6 +151,8 @@ def import_sqlite(source: Path, target: TaskStore):
         versions = [r[0] for r in original.execute('SELECT version FROM schema_migrations ORDER BY version')]
         tables = ['users', 'sessions', 'system_settings', 'sms_challenges', 'auth_limits', 'files', 'prompt_categories', 'prompt_templates', 'analyses', 'tasks', 'jobs', 'audit_logs', 'channels', 'channel_metadata']
         tables += ['credit_accounts', 'credit_lots', 'trial_claims', 'credit_entries', 'credit_reservations', 'credit_allocations', 'business_requests', 'generation_attempts']
+        tables += ['packages', 'membership_entries']
+        tables += ['payment_assets', 'payment_codes', 'orders', 'order_evidence', 'payment_receipts', 'order_reviews', 'financial_requests', 'credit_adjustments']
         available = {r[0] for r in original.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         with target.transaction() as db:
             db.execute('BEGIN')
@@ -156,6 +162,9 @@ def import_sqlite(source: Path, target: TaskStore):
             for table in tables:
                 if table not in available:
                     continue
+                if table == 'packages':
+                    # Replace only untouched migration suggestions with authoritative source data.
+                    db.execute("DELETE FROM packages WHERE id IN ('credits30','credits120','weekly','monthly') AND created_at=? AND updated_at=? AND status='draft'", ('2026-10-29T00:00:00+00:00', '2026-10-29T00:00:00+00:00'))
                 for row in original.execute(f'SELECT * FROM {table}'):
                     values = dict(row)
                     names = list(values)
