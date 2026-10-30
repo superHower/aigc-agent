@@ -17,7 +17,11 @@ def users(request: Request, limit: int = 50, offset: int = 0):
     if not 1 <= limit <= 100 or offset < 0:
         raise HTTPException(422, '分页参数不正确')
     with request.app.state.store.transaction() as db:
-        return {'items': [dict(r) for r in db.execute('SELECT id,username,phone,role,disabled,membership_expires_at,created_at FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?', (limit, offset))]}
+        from backend.services import credits
+        credits.begin(db)
+        for row in db.execute('SELECT user_id FROM credit_accounts').fetchall():
+            credits.expire(db, row['user_id'])
+        return {'items': [dict(r) for r in db.execute('SELECT u.id,u.username,u.phone,u.role,u.disabled,u.membership_expires_at,u.created_at,COALESCE(c.available,0) AS available,COALESCE(c.frozen,0) AS frozen FROM users u LEFT JOIN credit_accounts c ON c.user_id=u.id ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?', (limit, offset))], 'total': db.execute('SELECT COUNT(*) FROM users').fetchone()[0]}
 
 
 class UserStatus(BaseModel):

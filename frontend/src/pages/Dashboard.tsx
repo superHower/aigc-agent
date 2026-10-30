@@ -32,7 +32,7 @@ import { Link } from 'react-router-dom'
 import { AppHeader } from '../components/AppHeader'
 import { useAuth } from '../components/AuthProvider'
 import { Chart } from '../components/Chart'
-import { getDashboard, promptError, type DashboardData } from '../api/client'
+import { api, getDashboard, promptError, type DashboardData } from '../api/client'
 
 const statusLabels: Record<string, string> = {
   queued: '排队中',
@@ -85,7 +85,11 @@ export function Dashboard() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [revision, setRevision] = useState(0)
+  const [usage, setUsage] = useState<{ summary: { current_available: number; current_frozen: number; consumed: number }; membership: { active: boolean; expires_at: string | null; concurrency: number } }>()
   const date = selectedDate.format('YYYY-MM-DD')
+  useEffect(() => {
+    api.get('/account/usage', { params: { period, selected_date: date, timezone_offset: selectedDate.toDate().getTimezoneOffset() } }).then(r => setUsage(r.data)).catch(() => {})
+  }, [period, date, revision])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -241,7 +245,7 @@ export function Dashboard() {
           <div>
             <span className="dashboard-eyebrow">创作，一目了然。</span>
             <Typography.Title level={2}>数据概览</Typography.Title>
-            <Typography.Text type="secondary">从生成趋势到渠道表现，掌握每一次创作的进展。</Typography.Text>
+            <Typography.Text type="secondary">任务按创建时间统计；积分消耗按成功结算时间统计。</Typography.Text>
           </div>
           <Link to="/workspace">
             <Button type="primary" size="large" icon={<ThunderboltOutlined />}>
@@ -299,6 +303,7 @@ export function Dashboard() {
             style={{ marginBottom: 18 }}
           />
         )}
+        <Card style={{ marginBottom: 18 }}><Space size="large" wrap><Statistic title="可用积分" value={usage?.summary.current_available ?? 0} /><Statistic title="冻结积分" value={usage?.summary.current_frozen ?? 0} /><Statistic title="本期消耗积分" value={usage?.summary.consumed ?? 0} /><Typography.Text>{usage?.membership.active ? '会员' : '普通用户'} · 并发 {usage?.membership.concurrency ?? 1} · {usage?.membership.expires_at ? `到期 ${new Date(usage.membership.expires_at).toLocaleString()}` : '未开通会员'}</Typography.Text>{isAdmin && <Link to="/admin">经营总览与实际调用成本</Link>}</Space></Card>
         {loading && !data ? (
           <Card className="panel-card">
             <Skeleton active paragraph={{ rows: 8 }} />
@@ -461,12 +466,12 @@ export function Dashboard() {
                       <div>
                         <Typography.Text type="secondary">本周期基础预估费用</Typography.Text>
                         <div>
-                          <strong>¥{summary.estimated_cost.toFixed(2)}</strong>
+                          <Link to="/admin">查看调用成本统计</Link>
                         </div>
                       </div>
                       <Typography.Text type="secondary">
-                        按计划步骤 × ¥0.05 估算
-                        <br />含 OCR，不含重试；以实际账单为准
+                        按渠道配置单价估算
+                        <br />实际成本无账单来源时为未知
                       </Typography.Text>
                     </div>}
                   </Card>

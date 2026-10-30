@@ -31,18 +31,18 @@ export async function getDashboard(period: DashboardData['period'], date: string
   return (await api.get<DashboardData>('/dashboard', { params: { period, selected_date: date, timezone_offset: offset }, signal })).data
 }
 
-export type Channel = { id: string; name: string; model: string; base_url: string; remark: string; concurrency: number; timeout: number; enabled: boolean; has_api_key: boolean; last_error: string | null }
+export type Channel = { id: string; name: string; model: string; base_url: string; remark: string; concurrency: number; timeout: number; enabled: boolean; has_api_key: boolean; last_error: string | null; estimated_cost_cents: number | null }
 export type ChannelInput = Omit<Channel, 'id' | 'has_api_key' | 'last_error'> & { api_key: string }
 export async function listChannels() { return (await api.get<{ items: Channel[] }>('/channels')).data.items }
 export async function saveChannel(payload: ChannelInput, id?: string) { return (await (id ? api.put(`/channels/${id}`, payload) : api.post('/channels', payload))).data }
 export async function deleteChannel(id: string) { await api.delete(`/channels/${id}`) }
 export async function resetChannel(id: string) { await api.post(`/channels/${id}/reset`) }
 
-export type PromptCategory = { id: string; name: string; created_at: string }
-export type PromptTemplate = { id: string; name: string; content: string; category_id: string | null; created_at: string; updated_at: string }
-export type PromptTemplateInput = Pick<PromptTemplate, 'name' | 'content' | 'category_id'>
+export type PromptCategory = { id: string; name: string; created_at: string; visibility?: 'private' | 'public'; owner_id?: string }
+export type PromptTemplate = { id: string; name: string; content: string; category_id: string | null; created_at: string; updated_at: string; visibility?: 'private' | 'public'; owner_id?: string }
+export type PromptTemplateInput = Pick<PromptTemplate, 'name' | 'content' | 'category_id' | 'visibility'>
 export async function listPromptCategories() { return (await api.get<{ items: PromptCategory[] }>('/prompt-categories')).data.items }
-export async function savePromptCategory(name: string, id?: string) { return (await (id ? api.put<PromptCategory>(`/prompt-categories/${id}`, { name }) : api.post<PromptCategory>('/prompt-categories', { name }))).data }
+export async function savePromptCategory(name: string, id?: string, visibility = 'private') { return (await (id ? api.put<PromptCategory>(`/prompt-categories/${id}`, { name, visibility }) : api.post<PromptCategory>('/prompt-categories', { name, visibility }))).data }
 export async function deletePromptCategory(id: string) { await api.delete(`/prompt-categories/${id}`) }
 export async function listPromptTemplates() { return (await api.get<{ items: PromptTemplate[] }>('/prompt-templates')).data.items }
 export async function savePromptTemplate(payload: PromptTemplateInput, id?: string) { return (await (id ? api.put<PromptTemplate>(`/prompt-templates/${id}`, payload) : api.post<PromptTemplate>('/prompt-templates', payload))).data }

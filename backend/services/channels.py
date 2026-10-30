@@ -23,6 +23,7 @@ class ChannelInput(BaseModel):
     concurrency: int = Field(default=3, ge=1, le=20)
     timeout: int = Field(default=30, ge=1, le=300)
     enabled: bool = True
+    estimated_cost_cents: int | None = Field(default=None, strict=True, ge=0, le=1000000)
 
     @field_validator("name", "model", "base_url", "api_key", "remark")
     @classmethod
@@ -53,6 +54,9 @@ class ChannelStore:
                 );
                 CREATE TABLE IF NOT EXISTS channel_metadata (key TEXT PRIMARY KEY);
             """)
+            from backend.db.migrations import columns
+            if 'estimated_cost_cents' not in columns(connection, 'channels'):
+                connection.execute('ALTER TABLE channels ADD COLUMN estimated_cost_cents INTEGER')
 
     def seed(self, settings) -> None:
         with self.store._connect() as connection:
@@ -72,7 +76,7 @@ class ChannelStore:
     def public(row: dict) -> dict:
         return {key: value for key, value in row.items() if key != "api_key"} | {"has_api_key": bool(row["api_key"])}
 
-    def save(self, payload: ChannelInput, channel_id: str | None = None) -> dict:
+    def save(self, payload: ChannelInput, channel_id: str | None = None, actor_id=None) -> dict:
         old = next((row for row in self.list() if row["id"] == channel_id), None)
         if channel_id and old is None:
             raise LookupError("渠道不存在")
@@ -86,17 +90,27 @@ class ChannelStore:
         with self.store._connect() as connection:
             names = list(row)
             connection.execute(f"INSERT INTO channels ({','.join(names)}) VALUES ({','.join('?' for _ in names)}) ON CONFLICT (id) DO UPDATE SET " + ','.join(f"{name}=excluded.{name}" for name in names if name != "id"), tuple(row.values()))
+            if actor_id:
+                from backend.services.audit import log
+                # Never include keys, request addresses or upstream payloads in audit summaries.
+                log(connection, actor_id, 'channel_save', row['id'], {k: row[k] for k in ('name', 'model', 'concurrency', 'timeout', 'enabled', 'estimated_cost_cents')})
         return self.public(row)
 
-    def delete(self, channel_id: str) -> None:
+    def delete(self, channel_id: str, actor_id=None) -> None:
         with self.store._connect() as connection:
             if not connection.execute("DELETE FROM channels WHERE id = ?", (channel_id,)).rowcount:
                 raise LookupError("渠道不存在")
+            if actor_id:
+                from backend.services.audit import log
+                log(connection, actor_id, 'channel_delete', channel_id)
 
-    def reset(self, channel_id: str) -> None:
+    def reset(self, channel_id: str, actor_id=None) -> None:
         with self.store._connect() as connection:
             if not connection.execute("UPDATE channels SET last_error = NULL, updated_at = ? WHERE id = ?", (utc_now(), channel_id)).rowcount:
                 raise LookupError("渠道不存在")
+            if actor_id:
+                from backend.services.audit import log
+                log(connection, actor_id, 'channel_reset', channel_id)
 
     def available(self) -> list[dict]:
         return [row for row in self.list() if row["enabled"] and not row["last_error"]]

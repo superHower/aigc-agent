@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.db.task_store import utc_now
 from backend.services.access import current_user
+from backend.services.audit import log
 
 router = APIRouter(prefix="/api", tags=["prompt library"])
 
@@ -90,6 +91,7 @@ def create_category(payload: CategoryInput, request: Request):
         item_id = uuid4().hex
         try:
             db.execute("INSERT INTO prompt_categories (id,name,created_at,owner_id,display_name,visibility) VALUES (?, ?, ?, ?, ?, ?)", (item_id, item_id, utc_now(), user["id"], payload.name, payload.visibility))
+            log(db, user['id'], 'category_create', item_id, payload.model_dump())
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "分类名称已存在") from exc
         return require_row(db, "prompt_categories", item_id, current_user(request))
@@ -104,6 +106,7 @@ def update_category(item_id: str, payload: CategoryInput, request: Request):
             if payload.visibility == 'private' and db.execute("SELECT 1 FROM prompt_templates WHERE category_id=? AND visibility='public'", (item_id,)).fetchone():
                 raise HTTPException(409, '请先将分类中的公共模板移出或设为私有')
             db.execute("UPDATE prompt_categories SET display_name = ?, visibility = ? WHERE id = ?", (payload.name, payload.visibility, item_id))
+            log(db, current_user(request)['id'], 'category_update', item_id, payload.model_dump())
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "分类名称已存在") from exc
         return require_row(db, "prompt_categories", item_id, current_user(request))
@@ -114,6 +117,7 @@ def delete_category(item_id: str, request: Request):
     with connection(request) as db:
         require_row(db, "prompt_categories", item_id, current_user(request), write=True)
         db.execute("DELETE FROM prompt_categories WHERE id = ?", (item_id,))
+        log(db, current_user(request)['id'], 'category_delete', item_id)
     return Response(status_code=204)
 
 
@@ -159,6 +163,7 @@ def save_template(db, payload: TemplateInput, item_id: str, create: bool, user):
             "UPDATE prompt_templates SET name = ?, content = ?, category_id = ?, updated_at = ?, visibility = ? WHERE id = ?",
             (payload.name, payload.content, payload.category_id, now, payload.visibility, item_id),
         )
+    log(db, user['id'], 'template_create' if create else 'template_update', item_id, {'name': payload.name, 'visibility': payload.visibility, 'category_id': payload.category_id})
     return require_row(db, "prompt_templates", item_id, user)
 
 
@@ -179,4 +184,5 @@ def delete_template(item_id: str, request: Request):
     with connection(request) as db:
         require_row(db, "prompt_templates", item_id, current_user(request), write=True)
         db.execute("DELETE FROM prompt_templates WHERE id = ?", (item_id,))
+        log(db, current_user(request)['id'], 'template_delete', item_id)
     return Response(status_code=204)

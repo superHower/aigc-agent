@@ -12,6 +12,10 @@ const items = [
   { key: '/account/credits', label: '我的积分' },
   { key: '/account/membership', label: '会员套餐' },
   { key: '/admin/packages', label: '套餐设置' },
+  { key: '/admin/users', label: '用户管理' },
+  { key: '/admin/audit', label: '操作审计' },
+  { key: '/admin/attempts', label: '调用明细' },
+  { key: '/admin', label: '经营总览' },
   { key: '/orders', label: '我的订单' },
   { key: '/admin/orders', label: '充值审核' },
   { key: '/admin/payment-settings', label: '收款设置' },
@@ -34,7 +38,7 @@ export function AppHeader() {
         <span>AI 生图</span>
       </NavLink>
       <nav className="app-nav" aria-label="页面导航">
-        {items.filter((item) => (!item.key.startsWith('/admin/') && item.key !== '/channels') || user?.role === 'admin').map((item) => (
+        {items.filter((item) => (!item.key.startsWith('/admin') && item.key !== '/channels') || user?.role === 'admin').map((item) => (
           <NavLink
             key={item.key}
             to={item.key}

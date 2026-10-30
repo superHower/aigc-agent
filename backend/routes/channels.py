@@ -15,7 +15,7 @@ def list_channels(request: Request):
 @router.post("")
 def create_channel(payload: ChannelInput, request: Request):
     try:
-        return request.app.state.channels.save(payload)
+        return request.app.state.channels.save(payload, actor_id=require_admin(request)['id'])
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -23,7 +23,7 @@ def create_channel(payload: ChannelInput, request: Request):
 @router.put("/{channel_id}")
 def update_channel(channel_id: str, payload: ChannelInput, request: Request):
     try:
-        return request.app.state.channels.save(payload, channel_id)
+        return request.app.state.channels.save(payload, channel_id, actor_id=require_admin(request)['id'])
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
@@ -33,7 +33,7 @@ def update_channel(channel_id: str, payload: ChannelInput, request: Request):
 @router.delete("/{channel_id}")
 def delete_channel(channel_id: str, request: Request):
     try:
-        request.app.state.channels.delete(channel_id)
+        request.app.state.channels.delete(channel_id, actor_id=require_admin(request)['id'])
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"ok": True}
@@ -42,7 +42,7 @@ def delete_channel(channel_id: str, request: Request):
 @router.post("/{channel_id}/reset")
 def reset_channel(channel_id: str, request: Request):
     try:
-        request.app.state.channels.reset(channel_id)
+        request.app.state.channels.reset(channel_id, actor_id=require_admin(request)['id'])
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"ok": True}

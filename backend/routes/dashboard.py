@@ -17,4 +17,8 @@ def get_dashboard(
     timezone_offset: int = Query(default=0, ge=-840, le=840),
 ):
     user = current_user(request)
-    return dashboard_stats(request.app.state.store, period, selected_date, timezone_offset, user["id"] if user["role"] != "admin" else None)
+    result = dashboard_stats(request.app.state.store, period, selected_date, timezone_offset, user["id"] if user["role"] != "admin" else None)
+    # The old planned-step cost is not a provider bill; use the operations call ledger instead.
+    for key in ('summary', 'previous'):
+        result[key]['estimated_cost'] = 0
+    return result

@@ -55,6 +55,7 @@ export function Channels() {
         <Form.Item name="api_key" label="API Key" extra={editing ? '留空保留原有密钥' : undefined} rules={[{ required: !editing, whitespace: true }]}><Input.Password autoComplete="new-password" /></Form.Item>
         <Space align="start"><Form.Item name="concurrency" label="并发图片数" rules={[{ required: true }]}><InputNumber min={1} max={20} precision={0} /></Form.Item><Form.Item name="timeout" label="请求超时（秒）" rules={[{ required: true }]}><InputNumber min={1} max={300} precision={0} /></Form.Item><Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item></Space>
         <Form.Item name="remark" label="备注"><Input.TextArea maxLength={2000} rows={3} /></Form.Item>
+        <Form.Item name="estimated_cost_cents" label="每次请求估算成本（整数分，可留空）" extra="只作配置估算，包含失败和重试请求，不代表上游实际账单。"><InputNumber min={0} max={1000000} precision={0} /></Form.Item>
       </Form>
     </Modal>
   </Layout.Content></Layout>

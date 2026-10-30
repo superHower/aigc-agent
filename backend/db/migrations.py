@@ -212,6 +212,19 @@ def migrate(store):
                 );
             ''')
             stamp(db, 6)
+        if 7 not in applied:
+            for name, definition in (
+                ('channel_id', 'TEXT'), ('channel_name', 'TEXT'), ('model', 'TEXT'),
+                ('retry_round', 'INTEGER NOT NULL DEFAULT 0'),
+                ('dispatched', 'INTEGER'),
+                ('estimated_cost_cents', 'INTEGER'),
+                ('error_code', 'TEXT'),
+            ):
+                db.execute(f'ALTER TABLE generation_attempts ADD COLUMN {name} {definition}')
+            channel_columns = columns(db, 'channels')
+            if channel_columns and 'estimated_cost_cents' not in channel_columns:
+                db.execute('ALTER TABLE channels ADD COLUMN estimated_cost_cents INTEGER')
+            stamp(db, 7)
 
 
 def stamp(db, version):

@@ -13,6 +13,7 @@ from PIL import Image
 from backend.services.multi_image import fit_output
 from backend.services.channels import ChannelPool, ChannelUnavailable
 from backend.services import credits
+from backend.services import attempts
 from backend.services.admission import Admission
 from backend.db.task_store import utc_now
 
@@ -101,6 +102,7 @@ class TaskManager:
     ) -> None:
         self.store.set_task_status(task_id, "running")
         for attempt in range(self.max_retries + 1):
+            attempt_id = None
             job = self.store.get_job(job_id)
             if job is None:
                 return
@@ -111,6 +113,8 @@ class TaskManager:
             self.store.update_job(job_id, status="processing", retry_count=attempt)
             try:
                 async with self.api_semaphore:
+                    attempt_id = attempts.start(self.store, job_id, editor=self.editor, retry_round=attempt)
+                    dispatch_options = {'on_dispatch': lambda: attempts.dispatched(self.store, attempt_id)} if isinstance(self.editor, ImageEditor) else {}
                     output_path, _ = await asyncio.wait_for(
                         self.editor.edit(
                         job_id=job_id,
@@ -122,11 +126,15 @@ class TaskManager:
                         output_format=output_format,
                         reference_path=reference_path,
                         request_timeout=self.request_timeout,
+                        **dispatch_options,
                         ),
                         timeout=self.job_timeout,
                     )
                 job = self.store.get_job(job_id)
+                attempts.finish(self.store, attempt_id, 'done')
                 if job and job["cancel_requested"]:
+                    with self.store.transaction() as db:
+                        db.execute('UPDATE generation_attempts SET response_after_cancel=1 WHERE id=?', (attempt_id,))
                     self.store.update_job(job_id, status="cancelled", error="cancelled_after_response")
                     self.store.set_task_status(task_id, "cancelled")
                     return
@@ -142,12 +150,15 @@ class TaskManager:
                 self.store.finalize_task(task_id)
                 return
             except Exception as exc:
-                logger.exception("Job %s failed on attempt %s", job_id, attempt + 1)
+                logger.error("Job %s failed on attempt %s (%s)", job_id, attempt + 1, type(exc).__name__)
                 if attempt >= self.max_retries:
                     self.store.update_job(job_id, status="failed", error=str(exc), retry_count=attempt)
                     self.store.finalize_task(task_id)
                     return
                 await asyncio.sleep(min(2**attempt, 8))
+            finally:
+                if attempt_id:
+                    attempts.finish(self.store, attempt_id, 'unknown', 'execution_interrupted_or_failed')
 
     def cancel(self, task_id: str) -> tuple[int, int]:
         return self.store.request_cancel(task_id)
@@ -232,7 +243,7 @@ class TaskManager:
                     source_jobs.setdefault(job["source_id"], []).append(dict(job))
             self.store.finalize_task(task_id)
         except Exception:
-            logger.exception('Task %s stopped unexpectedly', task_id)
+            logger.error('Task %s stopped unexpectedly', task_id)
             for job in self.store.get_jobs(task_id):
                 if job['status'] in ('pending', 'processing'):
                     self.store.update_job(job['id'], status='failed', error='execution_interrupted')
@@ -362,9 +373,7 @@ class TaskManager:
                             if not user or user['disabled']:
                                 self.store.update_job(job_data['id'], status='cancelled', cancel_requested=1, error='account_disabled')
                                 return False
-                        attempt_id = uuid4().hex
-                        with self.store.transaction() as db:
-                            db.execute("INSERT INTO generation_attempts (id,job_id,started_at,status) VALUES (?,?,?,'started')", (attempt_id, job_data['id'], utc_now()))
+                        attempt_id = attempts.start(self.store, job_data['id'], runtime, runtime.editor if runtime else self.editor, retry_offset + attempt)
                         self.store.update_job(job_data["id"], status="processing", retry_count=retry_offset + attempt, input_path=str(input_path))
                         return True
 
@@ -374,11 +383,17 @@ class TaskManager:
                     mask_path = self._scaled_mask(Path(job_data["mask_path"]), input_path, job_data["id"])
                     output_options = rule.get("outputs", {}).get(job_data["id"], {})
                     edit = self.editor.edit if runtime is None else lambda **kwargs: self.channel_pool.edit(runtime, on_start=mark_processing, capacity_reserved=True, **kwargs)
+                    target_editor = runtime.editor if runtime else self.editor
+                    def mark_dispatched():
+                        if attempt_id:
+                            attempts.dispatched(self.store, attempt_id)
+                    dispatch_options = {'on_dispatch': mark_dispatched} if isinstance(target_editor, ImageEditor) else {}
                     output_path, _ = await asyncio.wait_for(edit(
                         job_id=job_data["id"], input_path=input_path, mask_path=mask_path,
                         prompt=job_data["prompt"], size=output_options.get("size", rule["size"]), quality=rule["quality"],
                         output_format=rule["output_format"], request_timeout=self.request_timeout,
                         reference_paths=[Path(path) for path in rule.get("reference_paths", [])],
+                        **dispatch_options,
                     ), timeout=None if runtime else self.job_timeout)
                     if output_options.get("width"):
                         await asyncio.to_thread(fit_output, output_path, output_options["width"], output_options["height"])
@@ -401,16 +416,24 @@ class TaskManager:
                         db.execute("UPDATE generation_attempts SET ended_at=?,status='done' WHERE id=?", (utc_now(), attempt_id))
                 return
             except ChannelUnavailable as exc:
+                if attempt_id:
+                    attempts.finish(self.store, attempt_id, 'failed', 'channel_unavailable')
                 self.store.update_job(job_data["id"], status="failed", error=str(exc), retry_count=retry_offset + attempt)
                 return
             except asyncio.TimeoutError:
+                if attempt_id:
+                    attempts.finish(self.store, attempt_id, 'unknown', 'timeout')
                 self.store.update_job(job_data["id"], status="failed", error="job_timeout", retry_count=retry_offset + attempt)
                 return
             except asyncio.CancelledError:
+                if attempt_id:
+                    attempts.finish(self.store, attempt_id, 'unknown', 'cancelled')
                 self.store.update_job(job_data["id"], status="cancelled", error="cancelled")
                 return
             except Exception as exc:
-                logger.exception("Job %s failed on attempt %s", job_data["id"], attempt + 1)
+                if attempt_id:
+                    attempts.finish(self.store, attempt_id, 'failed', 'generation_failed')
+                logger.error("Job %s failed on attempt %s (%s)", job_data["id"], attempt + 1, type(exc).__name__)
                 if runtime or attempt >= self.max_retries:
                     self.store.update_job(job_data["id"], status="failed", error=str(exc), retry_count=retry_offset + attempt)
                     return

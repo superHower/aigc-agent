@@ -4,9 +4,11 @@ import { deletePromptCategory, deletePromptTemplate, promptError, savePromptCate
 import { AppHeader } from '../components/AppHeader'
 import { PromptTemplateEditor } from '../components/PromptTemplateEditor'
 import { categoryOptions, filterTemplates, usePromptLibrary } from '../hooks/usePromptLibrary'
+import { useAuth } from '../components/AuthProvider'
 
 export function Prompts() {
   const library = usePromptLibrary()
+  const { user } = useAuth()
   const [category, setCategory] = useState('all')
   const [query, setQuery] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
@@ -16,7 +18,7 @@ export function Prompts() {
   const [categoryEditorOpen, setCategoryEditorOpen] = useState(false)
   const [editingCategory, setEditingCategory] = useState<PromptCategory>()
   const [busy, setBusy] = useState(false)
-  const [categoryForm] = Form.useForm<{ name: string }>()
+  const [categoryForm] = Form.useForm<{ name: string; visibility: string }>()
   const mutate = async (action: () => Promise<unknown>, success: string) => {
     setBusy(true)
     try { await action(); message.success(success); await library.refresh(); return true }
@@ -25,12 +27,12 @@ export function Prompts() {
   }
   const editCategory = (item?: PromptCategory) => {
     setEditingCategory(item)
-    categoryForm.setFieldsValue({ name: item?.name ?? '' })
+    categoryForm.setFieldsValue({ name: item?.name ?? '', visibility: item?.visibility ?? 'private' })
     setCategoryEditorOpen(true)
   }
   const saveCategory = async () => {
     const values = await categoryForm.validateFields().catch(() => null)
-    if (values && await mutate(() => savePromptCategory(values.name.trim(), editingCategory?.id), '分类已保存')) setCategoryEditorOpen(false)
+    if (values && await mutate(() => savePromptCategory(values.name.trim(), editingCategory?.id, values.visibility), '分类已保存')) setCategoryEditorOpen(false)
   }
   return <Layout className="app-shell"><AppHeader /><Layout.Content className="workspace-content">
     <Card className="panel-card" title="提示词管理" extra={<Space wrap><Button onClick={() => setCategoriesOpen(true)}>管理分类</Button><Button type="primary" onClick={() => { setEditing(undefined); setEditorOpen(true) }}>新建模板</Button></Space>}>
@@ -44,6 +46,7 @@ export function Prompts() {
       <Table<PromptTemplate> rowKey="id" loading={library.loading} dataSource={filterTemplates(library.templates, category, query)} scroll={{ x: 760 }} pagination={{ pageSize: 10, showTotal: (total) => `共 ${total} 个模板` }} locale={{ emptyText: '暂无模板，请新建模板或调整筛选条件' }} columns={[
         { title: '模板名称', dataIndex: 'name', width: 180, render: (name, item) => <Button type="link" className="prompt-name" onClick={() => setPreview(item)}>{name}</Button> },
         { title: '分类', width: 140, render: (_, item) => <Tag>{library.categories.find((category) => category.id === item.category_id)?.name ?? '未分类'}</Tag> },
+        { title: '范围', dataIndex: 'visibility', render: (v: string) => v === 'public' ? '公共' : '私有' },
         { title: '提示词内容', dataIndex: 'content', render: (content: string) => <Typography.Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{content}</Typography.Paragraph> },
         { title: '操作', width: 190, render: (_, item) => <Space><Button size="small" onClick={() => setPreview(item)}>查看</Button><Button size="small" onClick={() => { setEditing(item); setEditorOpen(true) }}>编辑</Button><Popconfirm title="删除这个提示词模板？" okText="删除" cancelText="取消" okButtonProps={{ loading: busy }} onConfirm={() => mutate(() => deletePromptTemplate(item.id), '模板已删除')}><Button size="small" danger disabled={busy}>删除</Button></Popconfirm></Space> },
       ]} />
@@ -55,7 +58,7 @@ export function Prompts() {
       <List dataSource={library.categories} locale={{ emptyText: '暂无分类' }} renderItem={(item) => <List.Item actions={[<Button key="edit" size="small" onClick={() => editCategory(item)}>重命名</Button>, <Popconfirm key="delete" title="删除分类并将模板移至未分类？" okText="删除" cancelText="取消" okButtonProps={{ loading: busy }} onConfirm={async () => { if (await mutate(() => deletePromptCategory(item.id), '分类已删除') && category === item.id) setCategory('all') }}><Button danger size="small" disabled={busy}>删除</Button></Popconfirm>]}><Typography.Text>{item.name}</Typography.Text></List.Item>} />
     </Modal>
     <Modal title={editingCategory ? '重命名分类' : '新增分类'} open={categoryEditorOpen} onCancel={() => setCategoryEditorOpen(false)} onOk={() => void saveCategory()} confirmLoading={busy} cancelButtonProps={{ disabled: busy }} closable={!busy} maskClosable={!busy} keyboard={!busy} okText="保存" cancelText="取消">
-      <Form form={categoryForm} layout="vertical" disabled={busy}><Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true, message: '请输入分类名称' }, { max: 100 }]}><Input maxLength={100} placeholder="例如：背景替换、商品精修" /></Form.Item></Form>
+      <Form form={categoryForm} layout="vertical" disabled={busy}><Form.Item name="name" label="分类名称" rules={[{ required: true, whitespace: true, message: '请输入分类名称' }, { max: 100 }]}><Input maxLength={100} placeholder="例如：背景替换、商品精修" /></Form.Item>{user?.role === 'admin' && <Form.Item name="visibility" label="可见范围"><Select options={[{ value: 'private', label: '私有' }, { value: 'public', label: '公共' }]} /></Form.Item>}</Form>
     </Modal>
   </Layout.Content></Layout>
 }

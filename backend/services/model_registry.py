@@ -24,7 +24,7 @@ class ModelRegistry:
         try:
             response = await self.client.models.list()
         except Exception as exc:
-            logger.error("Failed to list models from relay: %s", exc)
+            logger.error("Failed to list models from relay (%s)", type(exc).__name__)
             raise RuntimeError("model list request failed") from exc
 
         available = {str(item.id) for item in response.data}

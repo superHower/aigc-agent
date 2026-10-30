@@ -35,6 +35,7 @@ class ImageEditor:
         quality: str,
         output_format: str,
         request_timeout: float,
+        on_dispatch=None,
     ) -> tuple[Path, dict[str, Any]]:
         input_bytes = input_path.read_bytes()
         mask_bytes = mask_path.read_bytes()
@@ -64,6 +65,8 @@ class ImageEditor:
             image_inputs = [image_file]
             reference_files = [stack.enter_context(path.open("rb")) for path in (reference_paths or ([reference_path] if reference_path else []))]
             image_inputs.extend(reference_files)
+            if on_dispatch:
+                on_dispatch()
             result = await self.client.images.edit(
                 model=model,
                 image=image_inputs,

@@ -103,7 +103,6 @@ export function Workspace() {
           0,
         )
       : 0
-  const expectedCount = sourceIds.length * ratios.length + ocrSteps
   const fileOptions = files.map((file) => ({ value: file.file_id, label: file.filename }))
 
   const analyze = async (uploaded: UploadedFile[]) => {
@@ -380,7 +379,7 @@ export function Workspace() {
                 </Space>
                 <Alert
                   type="info"
-                  message={isAdmin ? `预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}，预计费用 ¥${(expectedCount * 0.05).toFixed(2)}` : `预计生成 ${sourceIds.length * ratios.length} 张，需要 ${sourceIds.length * ratios.length} 积分；可用 ${available ?? '加载中'}。成功扣费，最终失败或取消释放；文字识别免费。`}
+                  message={isAdmin ? `预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}；成本请在经营总览按调用记录查看。` : `预计生成 ${sourceIds.length * ratios.length} 张，需要 ${sourceIds.length * ratios.length} 积分；可用 ${available ?? '加载中'}。成功扣费，最终失败或取消释放；文字识别免费。`}
                 />
               </Space>
             </Card>
@@ -463,7 +462,7 @@ export function Workspace() {
                     排队 {task?.jobs.filter((job) => job.status === 'pending').length ?? 0}
                   </Typography.Text>
                   <Typography.Text>全局并发上限 {task?.max_concurrency ?? '—'}</Typography.Text>
-                  {isAdmin ? <Typography.Text>预计 ¥{(task?.estimated_cost ?? 0).toFixed(2)}</Typography.Text> : <Typography.Text>已扣 {task?.credit_summary?.settled ?? 0} · 冻结 {task?.credit_summary?.frozen ?? 0} · 释放 {task?.credit_summary?.released ?? 0} 积分</Typography.Text>}
+                  {isAdmin ? <Typography.Text>实际成本以核实账单为准</Typography.Text> : <Typography.Text>已扣 {task?.credit_summary?.settled ?? 0} · 冻结 {task?.credit_summary?.frozen ?? 0} · 释放 {task?.credit_summary?.released ?? 0} 积分</Typography.Text>}
                   <Popconfirm
                     title="确定取消本次任务吗？"
                     description="排队中的步骤会停止，正在执行的步骤可能在当前请求结束后停止。"
