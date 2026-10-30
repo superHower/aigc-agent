@@ -178,6 +178,9 @@ class TaskManager:
         for job in selected:
             self.store.update_job(job["id"], status="pending", error=None, cancel_requested=0)
         rule = json.loads(task["edit_rule"])
+        rule['execution_job_ids'] = [job['id'] for job in selected]
+        with self.store.transaction() as db:
+            db.execute('UPDATE tasks SET edit_rule=? WHERE id=?', (json.dumps(rule), task_id))
         source_jobs: dict[str, list[dict[str, str]]] = {}
         for job in jobs:
             source_jobs.setdefault(job["source_id"], []).append(dict(job))
@@ -228,18 +231,24 @@ class TaskManager:
             await self.create_batch(task["id"], source_jobs, rule)
 
     async def _run_batch(self, task_id: str, source_jobs: dict[str, list[dict[str, str]]], rule: dict) -> None:
+        scope = rule.get('execution_job_ids')
+        if scope:
+            source_jobs = {source: [job for job in jobs if job['id'] in scope or job['status'] == 'done'] for source, jobs in source_jobs.items()}
+            source_jobs = {source: jobs for source, jobs in source_jobs.items() if jobs}
         self.store.set_task_status(task_id, "running")
         try:
             while True:
                 await self._run_batch_round(task_id, source_jobs, rule)
                 if not self.channel_pool or not self.channel_pool.store.available():
                     break
-                if not self.store.prepare_auto_retry(task_id):
+                if not self.store.prepare_auto_retry(task_id, scope):
                     break
                 # Rebuild complete chains: successful prerequisites supply their outputs,
                 # while only failed steps are queued again.
                 source_jobs = {}
                 for job in self.store.get_jobs(task_id):
+                    if scope and job['id'] not in scope and job['status'] != 'done':
+                        continue
                     source_jobs.setdefault(job["source_id"], []).append(dict(job))
             self.store.finalize_task(task_id)
         except Exception:
@@ -300,7 +309,8 @@ class TaskManager:
                     return
                 current_input = Path(completed["output_path"])
             for variant in variants:
-                variant["input_path"] = str(current_input)
+                if not rule.get('outputs', {}).get(variant['id'], {}).get('refinement'):
+                    variant["input_path"] = str(current_input)
             await _join_jobs(self._run_job_with_retries(task_id, variant, rule) for variant in variants)
             return
         for job_data in jobs:
@@ -392,7 +402,7 @@ class TaskManager:
                         job_id=job_data["id"], input_path=input_path, mask_path=mask_path,
                         prompt=job_data["prompt"], size=output_options.get("size", rule["size"]), quality=rule["quality"],
                         output_format=rule["output_format"], request_timeout=self.request_timeout,
-                        reference_paths=[Path(path) for path in rule.get("reference_paths", [])],
+                        reference_paths=[] if output_options.get('refinement') else [Path(path) for path in rule.get("reference_paths", [])],
                         **dispatch_options,
                     ), timeout=None if runtime else self.job_timeout)
                     if output_options.get("width"):

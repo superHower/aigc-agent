@@ -4,6 +4,7 @@ import { cancelTask, retryTask, promptError } from '../api/client'
 import { useTaskProgress } from '../hooks/useTaskProgress'
 import { AppHeader } from '../components/AppHeader'
 import { TaskResults } from '../components/TaskResults'
+import { RefineImageButton } from '../components/RefineImageButton'
 
 const colors: Record<string, string> = { completed: 'success', partial_failed: 'warning', failed: 'error', cancelled: 'default', processing: 'processing', pending: 'blue', done: 'success' }
 export function TaskDetail() {
@@ -22,12 +23,14 @@ export function TaskDetail() {
     <Card title="结果与步骤对比">
       <Button href={`/api/task/${id}/download`} disabled={!current.completed_jobs}>下载已生成图片 ZIP</Button>
       <Table rowKey="id" dataSource={current.jobs} pagination={false} columns={[
+        { title: '用时', dataIndex: 'duration_seconds', width: 120, render: (seconds?: number | null) => seconds == null ? '—' : seconds < 60 ? `${seconds.toFixed(1)} 秒` : `${Math.floor(seconds / 60)} 分 ${(seconds % 60).toFixed(1)} 秒` },
         { title: '步骤', dataIndex: 'step' }, { title: '渠道', dataIndex: 'channel_name' }, { title: '状态', dataIndex: 'status', render: (status: string) => <Tag color={colors[status]}>{status}</Tag> }, { title: '重试次数', dataIndex: 'retry_count' }, { title: '错误', dataIndex: 'error', ellipsis: true },
         { title: '结果', render: (_: unknown, job: typeof current.jobs[number]) => job.output_url ? <Space direction="vertical"><Image width={96} src={job.output_url} /><a href={job.output_url} download={job.output_filename ?? `${job.id}.png`}>下载图片</a></Space> : '-' },
-        { title: '操作', render: (_: unknown, job: typeof current.jobs[number]) => <Button size="small" disabled={!['failed','cancelled'].includes(job.status) || active} onClick={() => void retry(job.id)}>重试</Button> },
+        { title: '操作', render: (_: unknown, job: typeof current.jobs[number]) => <Space wrap>{job.status === 'done' ? <RefineImageButton job={job} disabled={active} onSubmitted={refresh} /> : <Button size="small" disabled={!['failed','cancelled'].includes(job.status) || active} onClick={() => void retry(job.id)}>重试</Button>}</Space> },
       ]} />
+      <Typography.Text type="secondary">用时为累计处理时间，包含重试，不含排队；历史记录无执行时间时显示“—”。</Typography.Text>
     </Card>
     {current.error && <Alert type="error" message={current.error} />}
-    <Row gutter={[16, 16]}><Col xs={24} lg={8}><Card title="原图输入"><Image.PreviewGroup>{[...new Set(current.jobs.map((job) => job.source_id))].map((sourceId) => <Image key={sourceId} width={150} src={`/api/files/${sourceId}`} />)}</Image.PreviewGroup></Card></Col><Col xs={24} lg={16}><Card title="已生成图片（可逐张下载）"><TaskResults jobs={current.jobs} /></Card></Col></Row>
+    <Row gutter={[16, 16]}><Col xs={24} lg={8}><Card title="原图输入"><Image.PreviewGroup>{[...new Set(current.jobs.map((job) => job.source_id))].map((sourceId) => <Image key={sourceId} width={150} src={`/api/files/${sourceId}`} />)}</Image.PreviewGroup></Card></Col><Col xs={24} lg={16}><Card title="已生成图片（可逐张下载）"><TaskResults jobs={current.jobs} active={active} onSubmitted={refresh} /></Card></Col></Row>
   </Space></main></div>
 }

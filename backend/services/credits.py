@@ -159,6 +159,9 @@ def retry(store, user_id, task_id, job_id, key):
         reserve(db, user_id, [j['id'] for j in selected])
         for job in selected:
             db.execute("UPDATE jobs SET status='pending',cancel_requested=0,error=NULL,output_path='',updated_at=? WHERE id=?", (utc_now(), job['id']))
+        rule = json.loads(task['edit_rule'])
+        rule['execution_job_ids'] = [job['id'] for job in selected]
+        db.execute('UPDATE tasks SET edit_rule=? WHERE id=?', (json.dumps(rule), task_id))
         db.execute("UPDATE tasks SET status='queued',error=NULL,auto_retry_count=0,updated_at=? WHERE id=?", (utc_now(), task_id))
         record_request(db, user_id, 'retry', key, digest, task_id)
     return True

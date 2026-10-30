@@ -197,7 +197,7 @@ class TaskStore:
                 (utc_now(), task_id),
             )
 
-    def prepare_auto_retry(self, task_id: str) -> bool:
+    def prepare_auto_retry(self, task_id: str, job_ids=None) -> bool:
         """Atomically reset only failed steps, preserving the retry budget across restarts."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -206,8 +206,8 @@ class TaskStore:
                 return False
             count = connection.execute(
                 "UPDATE jobs SET status = 'pending', error = NULL, retry_count = retry_count + 1, updated_at = ? "
-                "WHERE task_id = ? AND status = 'failed' AND cancel_requested = 0",
-                (utc_now(), task_id),
+                "WHERE task_id = ? AND status = 'failed' AND cancel_requested = 0" + (" AND id IN (" + ','.join('?' for _ in job_ids) + ')' if job_ids else ''),
+                (utc_now(), task_id, *(job_ids or [])),
             ).rowcount
             if not count:
                 return False

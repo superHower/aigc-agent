@@ -1,8 +1,9 @@
 import { Alert, Button, Empty, Image, Tag, Typography } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import type { TaskJob } from '../api/client'
+import { RefineImageButton } from './RefineImageButton'
 
-export function TaskResults({ jobs }: { jobs: TaskJob[] }) {
+export function TaskResults({ jobs, active, onSubmitted }: { jobs: TaskJob[]; active?: boolean; onSubmitted?: () => void }) {
   const results = jobs.filter((job) => job.output_url)
   const sourceIds = [...new Set(jobs.map((job) => job.source_id))]
   const errors = [...new Set(jobs.filter((job) => job.status === 'failed' && job.error).map((job) => job.error!))]
@@ -18,6 +19,7 @@ export function TaskResults({ jobs }: { jobs: TaskJob[] }) {
       <Tag color="success">已生成</Tag>
       {job.channel_name && <Tag>{job.channel_name}</Tag>}
       <Button icon={<DownloadOutlined />} href={job.output_url!} download={job.output_filename ?? `${job.id}.png`}>下载图片</Button>
+      <RefineImageButton job={job} disabled={active} onSubmitted={onSubmitted} />
     </div>)}
   </div></Image.PreviewGroup></>
 }

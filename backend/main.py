@@ -50,6 +50,7 @@ from backend.models.schemas import (
     CompositeRequest,
     CompositeResponse,
     RetryRequest,
+    RefineRequest,
     MultiImageRequest,
 )
 from backend.services.file_storage import save_source, validate_image_bytes
@@ -558,6 +559,8 @@ def task_view(request: Request, task_id: str) -> TaskView:
         raise HTTPException(status_code=404, detail="task not found")
     jobs = current.store.get_jobs(task_id)
     rule = json.loads(task["edit_rule"])
+    from backend.services.attempts import task_durations
+    durations = task_durations(current.store, task_id)
     views = []
     for job in jobs:
         output_url = (
@@ -567,6 +570,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
         )
         views.append(
             JobView(
+                duration_seconds=durations.get(job['id']),
                 id=job["id"], task_id=job["task_id"], source_id=job["source_id"],
                 step=job["step"], target_id=job["target_id"], status=job["status"], retry_count=job["retry_count"],
                 cancel_requested=bool(job["cancel_requested"]), input_path=job["input_path"],
@@ -686,6 +690,23 @@ async def retry_task(task_id: str, payload: RetryRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"task_id": task_id, "status": "queued"}
+
+
+@app.post('/api/task/{task_id}/jobs/{job_id}/refine')
+async def refine_image(task_id: str, job_id: str, payload: RefineRequest, request: Request):
+    from backend.services.refinement import prepare
+    current = state(request)
+    require_task(request, task_id)
+    if not payload.prompt.strip():
+        raise HTTPException(422, '请填写优化提示词')
+    created = prepare(current.store, task_id, job_id, payload.prompt.strip(), credits.require_key(request), current.settings.data_dir)
+    if created:
+        jobs = current.store.get_jobs(task_id)
+        chains = {}
+        for job in jobs:
+            chains.setdefault(job['source_id'], []).append(dict(job))
+        await current.manager.create_batch(task_id, chains, json.loads(current.store.get_task(task_id)['edit_rule']))
+    return {'task_id': task_id}
 
 
 @app.post("/api/task/{task_id}/cancel", response_model=CancelResponse)

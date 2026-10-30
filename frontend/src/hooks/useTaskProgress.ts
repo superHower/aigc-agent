@@ -27,7 +27,6 @@ export function useTaskProgress(taskId: string | null) {
         if (active) {
           const status = getStatus(reason)
           if (status === 404) {
-            sessionStorage.removeItem('workspace-task-id')
             setTask(null)
             setError('任务不存在，可能是任务数据库已清空。请重新提交任务。')
             return

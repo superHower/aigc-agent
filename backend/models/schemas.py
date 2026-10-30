@@ -218,7 +218,12 @@ class RetryRequest(BaseModel):
     source_id: str | None = None
 
 
+class RefineRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=32000)
+
+
 class JobView(BaseModel):
+    duration_seconds: float | None = None
     channel_name: str | None = None
     id: str
     task_id: str

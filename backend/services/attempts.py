@@ -1,8 +1,23 @@
 """Request observations, never inferred provider charges or raw upstream errors."""
 from uuid import uuid4
+from datetime import datetime, timezone
 
 from backend.db.task_store import utc_now
 from backend.services.image_editor import ImageEditor
+
+
+def task_durations(store, task_id):
+    """Sum observed execution time, including retries but excluding queue time."""
+    now = datetime.now(timezone.utc)
+    result = {}
+    with store.transaction() as db:
+        rows = db.execute('''SELECT a.job_id,a.started_at,a.ended_at FROM generation_attempts a
+            JOIN jobs j ON j.id=a.job_id WHERE j.task_id=?''', (task_id,)).fetchall()
+    for row in rows:
+        start = datetime.fromisoformat(row['started_at'])
+        end = datetime.fromisoformat(row['ended_at']) if row['ended_at'] else now
+        result[row['job_id']] = result.get(row['job_id'], 0) + max(0, (end-start).total_seconds())
+    return {job_id: round(seconds, 1) for job_id, seconds in result.items()}
 
 
 def start(store, job_id, runtime=None, editor=None, retry_round=0):

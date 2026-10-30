@@ -80,9 +80,7 @@ export function Workspace() {
   const [analyzing, setAnalyzing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const uploadInProgress = useRef(false)
-  const [taskId, setTaskId] = useState<string | null>(() =>
-    sessionStorage.getItem('workspace-task-id'),
-  )
+  const [taskId, setTaskId] = useState<string | null>(null)
   const { task, error: taskError, refresh: refreshTask } = useTaskProgress(taskId)
   const currentFile = files.find((file) => file.file_id === selectedFile) ?? files[0]
   const currentAnalysis = analysis.find((item) => item.file_id === currentFile?.file_id)
@@ -222,7 +220,6 @@ export function Workspace() {
       const result = await generateMultiImage(payload, submission.current!.key)
       submission.current = null
       setTaskId(result.task_id)
-      sessionStorage.setItem('workspace-task-id', result.task_id)
       message.success('任务已提交，可继续提交其他任务；所有任务共享并发额度')
     } catch (reason) {
       message.error(promptError(reason))
@@ -343,6 +340,7 @@ export function Workspace() {
                   <Typography.Text>
                     请把以下待处理图片的指定内容换成参考图的，其他内容不变。
                   </Typography.Text>
+                  <Checkbox disabled={!referenceId || !fileOptions.some(option => option.value !== referenceId)} checked={!!referenceId && targets.length === fileOptions.filter(option => option.value !== referenceId).length && targets.length > 0} indeterminate={targets.length > 0 && targets.length < fileOptions.filter(option => option.value !== referenceId).length} onChange={event => setTargets(event.target.checked ? fileOptions.filter(option => option.value !== referenceId).map(option => option.value) : [])}>全选待处理图片（不含参考图）</Checkbox>
                   <Select
                     mode="multiple"
                     style={{ width: '100%' }}
@@ -497,7 +495,7 @@ export function Workspace() {
                       ? '下载已生成图片 ZIP'
                       : '全部下载 ZIP'}
                   </Button>
-                  <TaskResults jobs={task?.jobs ?? []} />
+                  <TaskResults jobs={task?.jobs ?? []} active={!task || !terminalStatuses.includes(task.status)} onSubmitted={refreshTask} />
                 </div>
               </Card>
             )}
