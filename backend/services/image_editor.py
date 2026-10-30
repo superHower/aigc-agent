@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,9 +58,11 @@ class ImageEditor:
         snapshot_path = self.snapshots_dir / f"{job_id}_input.json"
         snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        with input_path.open("rb") as image_file, mask_path.open("rb") as mask_file:
+        with ExitStack() as stack:
+            image_file = stack.enter_context(input_path.open("rb"))
+            mask_file = stack.enter_context(mask_path.open("rb"))
             image_inputs = [image_file]
-            reference_files = [path.open("rb") for path in (reference_paths or ([reference_path] if reference_path else []))]
+            reference_files = [stack.enter_context(path.open("rb")) for path in (reference_paths or ([reference_path] if reference_path else []))]
             image_inputs.extend(reference_files)
             result = await self.client.images.edit(
                 model=model,
@@ -72,8 +75,6 @@ class ImageEditor:
                 n=1,
                 timeout=request_timeout,
             )
-            for reference_file in reference_files:
-                reference_file.close()
 
         if not result.data:
             raise RuntimeError("image edit returned no output")

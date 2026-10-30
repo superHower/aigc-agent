@@ -48,10 +48,8 @@ class Settings:
     def from_env(cls) -> "Settings":
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("OPENAI_BASE_URL")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set")
-        if not base_url:
-            raise RuntimeError("OPENAI_BASE_URL is not set")
+        api_key = api_key or ""
+        base_url = base_url or ""
 
         max_concurrency = _int_env("MAX_CONCURRENCY", 10)
         if not 1 <= max_concurrency <= 20:
@@ -63,8 +61,8 @@ class Settings:
             model_edit=os.getenv("MODEL_EDIT", "gpt-image-2.5-sunburst"),
             model_draft=os.getenv("MODEL_DRAFT", "gpt-image-2.5-flare"),
             max_concurrency=max_concurrency,
-            request_timeout=_float_env("REQUEST_TIMEOUT", 60),
-            job_timeout=_float_env("JOB_TIMEOUT", 240),
+            request_timeout=_float_env("REQUEST_TIMEOUT", 300),
+            job_timeout=_float_env("JOB_TIMEOUT", 360),
             max_retries=_int_env("MAX_RETRIES", 2),
             data_dir=Path(os.getenv("DATA_DIR", "./backend/media")).resolve(),
             database_path=Path(

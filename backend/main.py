@@ -19,6 +19,9 @@ from openai import AsyncOpenAI
 
 from backend.config import Settings
 from backend.routes.prompts import router as prompts_router
+from backend.routes.channels import router as channels_router
+from backend.routes.dashboard import router as dashboard_router
+from backend.services.channels import ChannelStore, ChannelPool
 from backend.db.task_store import TaskStore, utc_now
 from backend.models.schemas import (
     AnalyzeRequest,
@@ -62,13 +65,21 @@ async def lifespan(app: FastAPI):
         (settings.data_dir / directory).mkdir(parents=True, exist_ok=True)
     store = TaskStore(settings.database_path)
     store.recover_processing()
+    channels = ChannelStore(store)
+    channels.seed(settings)
+    channel_pool = ChannelPool(channels, settings.data_dir)
     client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
+        api_key=settings.openai_api_key or "unconfigured",
+        base_url=settings.openai_base_url or "http://127.0.0.1:1/v1",
         timeout=settings.request_timeout,
+        max_retries=0,
     )
     registry = ModelRegistry(client, settings.model_edit, settings.model_draft)
-    await registry.initialize()
+    if settings.openai_api_key and settings.openai_base_url:
+        try:
+            await registry.initialize()
+        except RuntimeError:
+            logger.warning("Default model discovery unavailable; channel management remains available")
     editor = ImageEditor(
         client,
         registry,
@@ -83,9 +94,11 @@ async def lifespan(app: FastAPI):
         settings.job_timeout,
         settings.max_retries,
         settings.max_concurrency,
+        channel_pool=channel_pool,
     )
     app.state.settings = settings
     app.state.store = store
+    app.state.channels = channels
     app.state.registry = registry
     app.state.manager = manager
     app.state.analyzer = Analyzer(store, settings.data_dir, OCRService())
@@ -93,11 +106,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        for worker in list(manager.running_tasks.values()):
+            worker.cancel()
+        await asyncio.gather(*list(manager.running_tasks.values()), return_exceptions=True)
+        await channel_pool.close()
         await client.close()
 
 
 app = FastAPI(title="ECOM IMAGE STUDIO", version="0.1.0", lifespan=lifespan)
 app.include_router(prompts_router)
+app.include_router(channels_router)
+app.include_router(dashboard_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -465,6 +484,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
                 output_path=job["output_path"], output_url=output_url, error=job["error"],
                 output_filename=rule.get("outputs", {}).get(job["id"], {}).get("filename"),
                 created_at=job["created_at"], updated_at=job["updated_at"],
+                channel_name=job["channel_name"],
             )
         )
     terminal_jobs = sum(job.status in {"done", "failed", "cancelled"} for job in views)
@@ -478,6 +498,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
             "completed_jobs": sum(job.status == "done" for job in source_jobs),
         })
     return TaskView(
+        auto_retry_count=task["auto_retry_count"],
         id=task["id"], status=task["status"], created_at=task["created_at"],
         updated_at=task["updated_at"], total_jobs=len(jobs),
         completed_jobs=sum(job.status == "done" for job in views),
@@ -485,7 +506,8 @@ def task_view(request: Request, task_id: str) -> TaskView:
         cancelled_jobs=sum(job.status == "cancelled" for job in views),
         progress=terminal_jobs / len(views) if views else 0,
         sources=sources, jobs=views, error=task["error"],
-        estimated_cost=round(len(jobs) * 0.05, 2), max_concurrency=current.settings.max_concurrency,
+        channel_errors=list(dict.fromkeys(job.error for job in views if job.error and job.error.startswith("渠道「"))),
+        estimated_cost=round(len(jobs) * 0.05, 2), max_concurrency=sum(row["concurrency"] for row in current.channels.available()) if hasattr(current, "channels") else current.settings.max_concurrency,
     )
 
 

@@ -93,6 +93,11 @@ class TaskStore:
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
             if "sequence" not in columns:
                 connection.execute("ALTER TABLE jobs ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0")
+            if "channel_name" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN channel_name TEXT")
+            task_columns = {row["name"] for row in connection.execute("PRAGMA table_info(tasks)")}
+            if "auto_retry_count" not in task_columns:
+                connection.execute("ALTER TABLE tasks ADD COLUMN auto_retry_count INTEGER NOT NULL DEFAULT 0")
             connection.execute("PRAGMA journal_mode = WAL")
 
     def register_file(self, record: dict[str, Any]) -> None:
@@ -213,6 +218,7 @@ class TaskStore:
 
     def update_job(self, job_id: str, **fields: Any) -> None:
         allowed = {
+            "channel_name",
             "status", "input_path", "output_path", "error", "retry_count",
             "cancel_requested", "prompt", "mask_path",
         }
@@ -236,9 +242,26 @@ class TaskStore:
     def reset_task_for_retry(self, task_id: str) -> None:
         with self._connect() as connection:
             connection.execute(
-                "UPDATE tasks SET status = 'queued', error = NULL, updated_at = ? WHERE id = ?",
+                "UPDATE tasks SET status = 'queued', error = NULL, auto_retry_count = 0, updated_at = ? WHERE id = ?",
                 (utc_now(), task_id),
             )
+
+    def prepare_auto_retry(self, task_id: str) -> bool:
+        """Atomically reset only failed steps, preserving the retry budget across restarts."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = connection.execute("SELECT status, auto_retry_count FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if not task or task["status"] != "running" or task["auto_retry_count"] >= 3:
+                return False
+            count = connection.execute(
+                "UPDATE jobs SET status = 'pending', error = NULL, retry_count = retry_count + 1, updated_at = ? "
+                "WHERE task_id = ? AND status = 'failed' AND cancel_requested = 0",
+                (utc_now(), task_id),
+            ).rowcount
+            if not count:
+                return False
+            connection.execute("UPDATE tasks SET auto_retry_count = auto_retry_count + 1, updated_at = ? WHERE id = ?", (utc_now(), task_id))
+            return True
 
     def set_task_status(self, task_id: str, status: str, error: str | None = None) -> None:
         with self._connect() as connection:

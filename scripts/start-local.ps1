@@ -10,11 +10,11 @@ try {
     $node = (Get-Command node -ErrorAction Stop).Source
     if (!(Ready 'http://127.0.0.1:8000/api/health')) {
         if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) { throw 'Port 8000 is occupied.' }
-        Start-Process $python -ArgumentList '-m uvicorn backend.main:app --host 127.0.0.1 --port 8000' -WorkingDirectory $project -WindowStyle Hidden -RedirectStandardOutput (Join-Path $project 'backend\dev.stdout.log') -RedirectStandardError (Join-Path $project 'backend\dev.stderr.log') | Out-Null
+        Start-Process $python -ArgumentList '-m uvicorn backend.main:app --host 0.0.0.0 --port 8000' -WorkingDirectory $project -WindowStyle Hidden -RedirectStandardOutput (Join-Path $project 'backend\dev.stdout.log') -RedirectStandardError (Join-Path $project 'backend\dev.stderr.log') | Out-Null
     }
     if (!(Ready 'http://127.0.0.1:5173')) {
         if (Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue) { throw 'Port 5173 is occupied.' }
-        Start-Process $node -ArgumentList 'node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort' -WorkingDirectory $frontend -WindowStyle Hidden -RedirectStandardOutput (Join-Path $frontend 'dev.stdout.log') -RedirectStandardError (Join-Path $frontend 'dev.stderr.log') | Out-Null
+        Start-Process $node -ArgumentList 'node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173 --strictPort' -WorkingDirectory $frontend -WindowStyle Hidden -RedirectStandardOutput (Join-Path $frontend 'dev.stdout.log') -RedirectStandardError (Join-Path $frontend 'dev.stderr.log') | Out-Null
     }
     Write-Host 'Waiting for services...'
     $deadline = (Get-Date).AddSeconds(90)

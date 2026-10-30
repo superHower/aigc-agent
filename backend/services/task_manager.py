@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,12 +12,13 @@ from backend.services.image_editor import ImageEditor
 from backend.services.mask_generator import create_mask
 from PIL import Image
 from backend.services.multi_image import fit_output
+from backend.services.channels import ChannelPool, ChannelUnavailable
 
 logger = logging.getLogger(__name__)
 
 
 class TaskManager:
-    def __init__(self, store: TaskStore, editor: ImageEditor, data_dir: Path, request_timeout: float, job_timeout: float, max_retries: int, max_concurrency: int = 3) -> None:
+    def __init__(self, store: TaskStore, editor: ImageEditor, data_dir: Path, request_timeout: float, job_timeout: float, max_retries: int, max_concurrency: int = 3, channel_pool: ChannelPool | None = None) -> None:
         self.store = store
         self.editor = editor
         self.data_dir = data_dir
@@ -25,6 +27,8 @@ class TaskManager:
         self.max_retries = max_retries
         self.api_semaphore = asyncio.Semaphore(max_concurrency)
         self.running_tasks: dict[str, asyncio.Task[None]] = {}
+        self.channel_pool = channel_pool
+        self.assignments: dict[str, dict] = {}
 
     async def create_single_job(
         self,
@@ -154,8 +158,6 @@ class TaskManager:
         rule = json.loads(task["edit_rule"])
         source_jobs: dict[str, list[dict[str, str]]] = {}
         for job in jobs:
-            if not rule.get("multi_image") and job["status"] == "done" and job["id"] not in {item["id"] for item in selected}:
-                continue
             source_jobs.setdefault(job["source_id"], []).append(dict(job))
         self.store.reset_task_for_retry(task_id)
         worker = asyncio.create_task(self._run_batch(task_id, source_jobs, rule))
@@ -189,8 +191,46 @@ class TaskManager:
 
     async def _run_batch(self, task_id: str, source_jobs: dict[str, list[dict[str, str]]], rule: dict) -> None:
         self.store.set_task_status(task_id, "running")
-        await asyncio.gather(*(self._run_source_chain(task_id, source_id, jobs, rule) for source_id, jobs in source_jobs.items()))
-        self.store.finalize_task(task_id)
+        try:
+            while True:
+                await self._run_batch_round(task_id, source_jobs, rule)
+                if not self.channel_pool or not self.channel_pool.store.available():
+                    break
+                if not self.store.prepare_auto_retry(task_id):
+                    break
+                # Rebuild complete chains: successful prerequisites supply their outputs,
+                # while only failed steps are queued again.
+                source_jobs = {}
+                for job in self.store.get_jobs(task_id):
+                    source_jobs.setdefault(job["source_id"], []).append(dict(job))
+            self.store.finalize_task(task_id)
+        finally:
+            self.assignments.pop(task_id, None)
+
+    async def _run_batch_round(self, task_id: str, source_jobs: dict[str, list[dict[str, str]]], rule: dict) -> None:
+        if self.channel_pool:
+            channels = self.channel_pool.snapshot()
+            all_jobs = [job for jobs in source_jobs.values() for job in jobs
+                        if (stored := self.store.get_job(job["id"])) and stored["status"] == "pending"]
+            if not channels:
+                for job in all_jobs:
+                    stored = self.store.get_job(job["id"])
+                    if stored and stored["status"] == "pending":
+                        self.store.update_job(job["id"], status="cancelled" if stored["cancel_requested"] else "failed", error="没有可用渠道，请在渠道管理中添加或恢复渠道")
+                return
+            # Give final outputs their own round-robin so OCR prerequisites do not skew allocation.
+            variants = [job for job in all_jobs if job["step"].startswith("custom_")]
+            prerequisites = [job for job in all_jobs if not job["step"].startswith("custom_")]
+            assigned = {}
+            for group in (variants, prerequisites):
+                for index, job in enumerate(group):
+                    assigned[job["id"]] = channels[index % len(channels)]
+                    self.store.update_job(job["id"], channel_name=channels[index % len(channels)].config["name"])
+            self.assignments[task_id] = assigned
+        try:
+            await asyncio.gather(*(self._run_source_chain(task_id, source_id, jobs, rule) for source_id, jobs in source_jobs.items()))
+        finally:
+            self.assignments.pop(task_id, None)
 
     async def _run_source_chain(self, task_id: str, source_id: str, jobs: list[dict[str, str]], rule: dict) -> None:
         current_input = Path(jobs[0]["input_path"]) if jobs else None
@@ -230,6 +270,10 @@ class TaskManager:
             await self._run_job_with_retries(task_id, job_data, rule)
             completed = self.store.get_job(job_data["id"])
             if completed is None or completed["status"] != "done":
+                for remaining in jobs:
+                    stored = self.store.get_job(remaining["id"])
+                    if stored and stored["status"] == "pending":
+                        self.store.update_job(remaining["id"], status="cancelled" if stored["cancel_requested"] else "failed", error="前置步骤未完成")
                 return
             if not is_variant:
                 current_input = Path(completed["output_path"])
@@ -244,29 +288,45 @@ class TaskManager:
             return scaled
 
     async def _run_job_with_retries(self, task_id: str, job_data: dict[str, str], rule: dict) -> None:
-        for attempt in range(self.max_retries + 1):
+        runtime = self.assignments.get(task_id, {}).get(job_data["id"])
+        stored = self.store.get_job(job_data["id"])
+        retry_offset = stored["retry_count"] if runtime and stored else 0
+        for attempt in range(1 if runtime else self.max_retries + 1):
             job = self.store.get_job(job_data["id"])
             if job is None or job["status"] == "done":
+                return
+            if self.channel_pool and task_id in self.assignments and runtime is None:
+                return
+            if job["status"] != "pending" and runtime:
                 return
             if job["cancel_requested"]:
                 self.store.update_job(job_data["id"], status="cancelled")
                 return
             try:
                 input_path = Path(job_data["input_path"])
-                async with self.api_semaphore:
+                async with (self.api_semaphore if runtime is None else nullcontext()):
                     job = self.store.get_job(job_data["id"])
                     if job and job["cancel_requested"]:
                         self.store.update_job(job_data["id"], status="cancelled")
                         return
-                    self.store.update_job(job_data["id"], status="processing", retry_count=attempt, input_path=str(input_path))
+                    def mark_processing():
+                        current = self.store.get_job(job_data["id"])
+                        if current is None or current["cancel_requested"]:
+                            return False
+                        self.store.update_job(job_data["id"], status="processing", retry_count=retry_offset + attempt, input_path=str(input_path))
+                        return True
+
+                    if runtime is None:
+                        mark_processing()
                     mask_path = self._scaled_mask(Path(job_data["mask_path"]), input_path, job_data["id"])
                     output_options = rule.get("outputs", {}).get(job_data["id"], {})
-                    output_path, _ = await asyncio.wait_for(self.editor.edit(
+                    edit = self.editor.edit if runtime is None else lambda **kwargs: self.channel_pool.edit(runtime, on_start=mark_processing, **kwargs)
+                    output_path, _ = await asyncio.wait_for(edit(
                         job_id=job_data["id"], input_path=input_path, mask_path=mask_path,
                         prompt=job_data["prompt"], size=output_options.get("size", rule["size"]), quality=rule["quality"],
                         output_format=rule["output_format"], request_timeout=self.request_timeout,
                         reference_paths=[Path(path) for path in rule.get("reference_paths", [])],
-                    ), timeout=self.job_timeout)
+                    ), timeout=None if runtime else self.job_timeout)
                     if output_options.get("width"):
                         await asyncio.to_thread(fit_output, output_path, output_options["width"], output_options["height"])
                 job = self.store.get_job(job_data["id"])
@@ -275,14 +335,18 @@ class TaskManager:
                     return
                 self.store.update_job(job_data["id"], status="done", output_path=str(output_path), error=None)
                 return
+            except ChannelUnavailable as exc:
+                self.store.update_job(job_data["id"], status="failed", error=str(exc), retry_count=retry_offset + attempt)
+                return
             except asyncio.TimeoutError:
-                self.store.update_job(job_data["id"], status="failed", error="job_timeout", retry_count=attempt)
+                self.store.update_job(job_data["id"], status="failed", error="job_timeout", retry_count=retry_offset + attempt)
                 return
             except asyncio.CancelledError:
                 self.store.update_job(job_data["id"], status="cancelled", error="cancelled")
                 return
             except Exception as exc:
-                if attempt >= self.max_retries:
-                    self.store.update_job(job_data["id"], status="failed", error=str(exc), retry_count=attempt)
+                logger.exception("Job %s failed on attempt %s", job_data["id"], attempt + 1)
+                if runtime or attempt >= self.max_retries:
+                    self.store.update_job(job_data["id"], status="failed", error=str(exc), retry_count=retry_offset + attempt)
                     return
                 await asyncio.sleep(min(2 ** attempt, 8))

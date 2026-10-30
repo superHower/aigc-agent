@@ -219,6 +219,7 @@ class RetryRequest(BaseModel):
 
 
 class JobView(BaseModel):
+    channel_name: str | None = None
     id: str
     task_id: str
     source_id: str
@@ -237,6 +238,9 @@ class JobView(BaseModel):
 
 
 class TaskView(BaseModel):
+    auto_retry_count: int = 0
+    auto_retry_limit: int = 3
+    channel_errors: list[str] = Field(default_factory=list)
     id: str
     status: str
     created_at: datetime

@@ -2,6 +2,31 @@ import axios from 'axios'
 
 export const api = axios.create({ baseURL: '/api', timeout: 120_000 })
 
+export type DashboardSummary = {
+  tasks: number; images: number; done: number; failed: number; cancelled: number
+  active: number; active_tasks: number; retried_tasks: number; steps: number
+  success_rate: number | null; estimated_cost: number
+}
+export type DashboardData = {
+  period: 'day' | 'week' | 'month'; start_date: string; end_date: string
+  previous_start_date: string; previous_end_date: string; updated_at: string
+  summary: DashboardSummary; previous: DashboardSummary
+  trend: { label: string; tasks: number; done: number; failed: number; active: number }[]
+  task_statuses: Record<string, number>
+  channels: { name: string; total: number; done: number; failed: number }[]
+  recent_tasks: { id: string; status: string; created_at: string; images: number; done: number; failed: number; auto_retry_count: number }[]
+}
+export async function getDashboard(period: DashboardData['period'], date: string, offset: number, signal?: AbortSignal) {
+  return (await api.get<DashboardData>('/dashboard', { params: { period, selected_date: date, timezone_offset: offset }, signal })).data
+}
+
+export type Channel = { id: string; name: string; model: string; base_url: string; remark: string; concurrency: number; timeout: number; enabled: boolean; has_api_key: boolean; last_error: string | null }
+export type ChannelInput = Omit<Channel, 'id' | 'has_api_key' | 'last_error'> & { api_key: string }
+export async function listChannels() { return (await api.get<{ items: Channel[] }>('/channels')).data.items }
+export async function saveChannel(payload: ChannelInput, id?: string) { return (await (id ? api.put(`/channels/${id}`, payload) : api.post('/channels', payload))).data }
+export async function deleteChannel(id: string) { await api.delete(`/channels/${id}`) }
+export async function resetChannel(id: string) { await api.post(`/channels/${id}/reset`) }
+
 export type PromptCategory = { id: string; name: string; created_at: string }
 export type PromptTemplate = { id: string; name: string; content: string; category_id: string | null; created_at: string; updated_at: string }
 export type PromptTemplateInput = Pick<PromptTemplate, 'name' | 'content' | 'category_id'>
@@ -19,8 +44,8 @@ export function promptError(reason: unknown) {
 export type UploadedFile = { file_id: string; filename: string; url: string; width: number; height: number; size: number; content_type: string }
 export type TextBlock = { id: string; bbox: [number, number, number, number]; position: string; original: string; confidence: number | null; mask_url: string }
 export type AnalysisFile = { file_id: string; width: number; height: number; thumbnail_url: string | null; text_blocks: TextBlock[]; logo_blocks: unknown[]; error: string | null }
-export type TaskJob = { id: string; task_id: string; source_id: string; step: string; target_id: string | null; status: string; retry_count: number; cancel_requested: boolean; output_url: string | null; output_filename?: string | null; error: string | null; created_at?: string; updated_at?: string }
-export type Task = { id: string; status: string; created_at?: string; updated_at?: string; total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; progress: number; estimated_cost?: number; max_concurrency?: number; sources?: { source_id: string; status: string; total_jobs: number; completed_jobs: number }[]; jobs: TaskJob[]; error?: string | null }
+export type TaskJob = { channel_name?: string | null; id: string; task_id: string; source_id: string; step: string; target_id: string | null; status: string; retry_count: number; cancel_requested: boolean; output_url: string | null; output_filename?: string | null; error: string | null; created_at?: string; updated_at?: string }
+export type Task = { auto_retry_count?: number; auto_retry_limit?: number; id: string; status: string; created_at?: string; updated_at?: string; total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; progress: number; estimated_cost?: number; max_concurrency?: number; sources?: { source_id: string; status: string; total_jobs: number; completed_jobs: number }[]; jobs: TaskJob[]; error?: string | null }
 
 export async function uploadFiles(files: File[]) { const form = new FormData(); files.forEach((file) => form.append('files', file)); return (await api.post<{ files: UploadedFile[] }>('/upload', form)).data }
 export async function analyzeFiles(fileIds: string[]) { return (await api.post<{ files: AnalysisFile[] }>('/analyze', { file_ids: fileIds })).data }
