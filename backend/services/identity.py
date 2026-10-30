@@ -101,6 +101,8 @@ def register(store, name, number, password, code):
             error = '用户名或手机号已被使用'
         else:
             db.execute('INSERT INTO users (id,username,phone,password_hash,role,created_at) VALUES (?,?,?,?,?,?)', (user_id, name, number, password_hash, 'user', utc_now()))
+            from backend.services.credits import trial
+            trial(db, user_id, number)
     if error:
         raise HTTPException(400, error)
     return {'id': user_id, 'username': name, 'role': 'user'}

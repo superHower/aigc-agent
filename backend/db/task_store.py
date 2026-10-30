@@ -164,11 +164,23 @@ class TaskStore:
         assignments = ", ".join(f"{key} = ?" for key in updates)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            from backend.services import credits
+            if connection.postgres:
+                connection.execute('SELECT pg_advisory_xact_lock(401031)')
             try:
+                old = connection.execute('SELECT status,cancel_requested FROM jobs WHERE id=?', (job_id,)).fetchone()
+                if old and old['status'] == 'done':
+                    return
+                if old and old['cancel_requested'] and updates.get('status') == 'done':
+                    updates['status'] = 'cancelled'
+                    updates['output_path'] = ''
+                    assignments = ", ".join(f"{key} = ?" for key in updates)
                 connection.execute(
                     f"UPDATE jobs SET {assignments} WHERE id = ?",
                     (*updates.values(), job_id),
                 )
+                if updates.get('status') == 'done':
+                    credits.finish(connection, job_id, True)
                 connection.execute("COMMIT")
             except Exception:
                 connection.execute("ROLLBACK")
@@ -212,7 +224,8 @@ class TaskStore:
 
     def request_cancel(self, task_id: str) -> tuple[int, int]:
         with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            from backend.services import credits
+            credits.begin(connection)
             try:
                 pending = connection.execute(
                     "SELECT COUNT(*) FROM jobs WHERE task_id = ? AND status IN ('pending', 'processing')",
@@ -255,23 +268,38 @@ class TaskStore:
         with self._connect() as connection:
             return connection.execute("SELECT * FROM tasks WHERE status IN ('queued', 'running', 'cancelling')").fetchall()
 
-    def create_batch(self, task_id: str, source_ids: list[str], rule: dict[str, Any], jobs: list[dict[str, Any]]) -> None:
-        now = utc_now()
+    def create_batch(self, task_id, source_ids, rule, jobs, *, owner_id=None, billable=False, key=None, digest=None):
+        from backend.services import credits
         with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            credits.begin(connection)
+            if key:
+                existing = credits.previous(connection, owner_id, 'create', key, digest)
+                if existing:
+                    return existing, False
+            self.insert_batch(connection, task_id, source_ids, rule, jobs, owner_id)
+            if billable:
+                connection.execute('UPDATE tasks SET billable=1 WHERE id=?', (task_id,))
+                credits.reserve(connection, owner_id, [job['id'] for job in jobs if rule.get('outputs', {}).get(job['id'], {}).get('variant')])
+            if key:
+                credits.record_request(connection, owner_id, 'create', key, digest, task_id)
+        return task_id, True
+
+    def insert_batch(self, connection, task_id, source_ids, rule, jobs, owner_id=None):
+        now = utc_now()
+        connection.execute(
+            "INSERT INTO tasks (id, created_at, updated_at, source_ids, edit_rule, owner_id) VALUES (?, ?, ?, ?, ?, COALESCE(?, (SELECT id FROM users WHERE role='admin' ORDER BY created_at LIMIT 1)))",
+            (task_id, now, now, json.dumps(source_ids), json.dumps(rule), owner_id),
+        )
+        for sequence, job in enumerate(jobs):
             connection.execute(
-                "INSERT INTO tasks (id, created_at, updated_at, source_ids, edit_rule, owner_id) VALUES (?, ?, ?, ?, ?, (SELECT id FROM users WHERE role='admin' ORDER BY created_at LIMIT 1))",
-                (task_id, now, now, json.dumps(source_ids), json.dumps(rule)),
+                """INSERT INTO jobs (id, task_id, source_id, step, target_id, status, prompt, mask_path,
+                input_path, output_path, sequence, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (job["id"], task_id, job["source_id"], job["step"], job.get("target_id"),
+                 job.get("status", "pending"), job["prompt"], job["mask_path"], job["input_path"],
+                 job.get("output_path", ""), sequence, now, now),
             )
-            for sequence, job in enumerate(jobs):
-                connection.execute(
-                    """INSERT INTO jobs (id, task_id, source_id, step, target_id, status, prompt, mask_path,
-                    input_path, output_path, sequence, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (job["id"], task_id, job["source_id"], job["step"], job.get("target_id"),
-                     job.get("status", "pending"), job["prompt"], job["mask_path"], job["input_path"],
-                     job.get("output_path", ""), sequence, now, now),
-                )
+
 
     def get_pending_jobs(self, task_id: str) -> list[sqlite3.Row]:
         with self._connect() as connection:
@@ -281,7 +309,9 @@ class TaskStore:
             ).fetchall()
 
     def finalize_task(self, task_id: str) -> str:
+        from backend.services import credits
         with self._connect() as connection:
+            credits.begin(connection)
             jobs = connection.execute("SELECT status FROM jobs WHERE task_id = ?", (task_id,)).fetchall()
             task = connection.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if task is None:
@@ -303,4 +333,5 @@ class TaskStore:
                 "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')",
                 (final, utc_now(), task_id),
             )
+            credits.reconcile_task(connection, task_id, True)
             return final

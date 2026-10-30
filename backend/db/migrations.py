@@ -73,6 +73,63 @@ def migrate(store):
             db.execute('UPDATE prompt_categories SET display_name=name')
             db.execute('CREATE UNIQUE INDEX idx_category_owner_name ON prompt_categories(owner_id,display_name)')
             stamp(db, 3)
+        if 4 not in applied:
+            db.executescript('''
+                CREATE TABLE credit_accounts (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id),
+                    available INTEGER NOT NULL DEFAULT 0 CHECK(available>=0),
+                    frozen INTEGER NOT NULL DEFAULT 0 CHECK(frozen>=0)
+                );
+                CREATE TABLE credit_lots (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                    source TEXT NOT NULL, original INTEGER NOT NULL CHECK(original>0),
+                    available INTEGER NOT NULL CHECK(available>=0), frozen INTEGER NOT NULL DEFAULT 0 CHECK(frozen>=0),
+                    expires_at TEXT, created_at TEXT NOT NULL, business_key TEXT NOT NULL UNIQUE
+                );
+                CREATE INDEX idx_credit_lots_owner ON credit_lots(user_id,expires_at);
+                CREATE TABLE trial_claims (
+                    phone TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id),
+                    lot_id TEXT NOT NULL UNIQUE REFERENCES credit_lots(id)
+                );
+                CREATE TABLE credit_entries (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), lot_id TEXT REFERENCES credit_lots(id),
+                    event TEXT NOT NULL, available_delta INTEGER NOT NULL, frozen_delta INTEGER NOT NULL,
+                    business_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+                );
+                CREATE INDEX idx_credit_entries_owner ON credit_entries(user_id,created_at);
+                CREATE TABLE credit_reservations (
+                    id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id),
+                    user_id TEXT NOT NULL REFERENCES users(id), round INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('frozen','settled','released')),
+                    created_at TEXT NOT NULL, UNIQUE(job_id,round)
+                );
+                CREATE TABLE credit_allocations (
+                    reservation_id TEXT PRIMARY KEY REFERENCES credit_reservations(id),
+                    lot_id TEXT NOT NULL REFERENCES credit_lots(id), amount INTEGER NOT NULL CHECK(amount=1)
+                );
+                CREATE TABLE business_requests (
+                    user_id TEXT NOT NULL REFERENCES users(id), operation TEXT NOT NULL, key TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id),
+                    created_at TEXT NOT NULL, PRIMARY KEY(user_id,operation,key)
+                );
+                CREATE TABLE generation_attempts (
+                    id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id),
+                    started_at TEXT NOT NULL, ended_at TEXT, status TEXT NOT NULL,
+                    cost_source TEXT NOT NULL DEFAULT 'unknown', cost_value INTEGER,
+                    response_after_cancel INTEGER NOT NULL DEFAULT 0
+                );
+            ''')
+            db.execute('ALTER TABLE tasks ADD COLUMN billable INTEGER NOT NULL DEFAULT 0')
+            # Do not retrospectively grant or charge existing accounts/tasks.
+            db.execute('INSERT INTO credit_accounts (user_id) SELECT id FROM users')
+            if db.postgres:
+                db.execute("""CREATE FUNCTION reject_credit_entry_change() RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN RAISE EXCEPTION 'credit entries are append only'; END; $$""")
+                db.execute('CREATE TRIGGER credit_entries_immutable BEFORE UPDATE OR DELETE ON credit_entries FOR EACH ROW EXECUTE FUNCTION reject_credit_entry_change()')
+            else:
+                for operation in ('UPDATE', 'DELETE'):
+                    db.execute(f"CREATE TRIGGER credit_entries_no_{operation.lower()} BEFORE {operation} ON credit_entries BEGIN SELECT RAISE(ABORT, 'credit entries are append only'); END")
+            stamp(db, 4)
 
 
 def stamp(db, version):

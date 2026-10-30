@@ -86,7 +86,9 @@ class ImageEditor:
         output_dir = self.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{job_id}.{output_format}"
-        output_path.write_bytes(image_bytes)
+        temporary = output_path.with_suffix(output_path.suffix + '.tmp')
+        temporary.write_bytes(image_bytes)
+        temporary.replace(output_path)
         snapshot.update(
             {
                 "finished_at": _utc_now(),

@@ -118,7 +118,7 @@ def test_two_users_isolated_across_files_jobs_zip_ocr_templates_dashboard(identi
         assert bob.get(url).status_code == 404
         assert alice.get(url).status_code == 200
     assert bob.post('/api/task/alice_task/cancel').status_code == 404
-    assert bob.post('/api/task/alice_task/retry', json={}).status_code == 403
+    assert bob.post('/api/task/alice_task/retry', json={}).status_code == 404
     assert bob.get('/api/tasks').json()['items'] == []
     assert 'SECRET CHANNEL' not in alice.get('/api/task/alice_task').text
     assert bob.get('/api/dashboard').json()['summary']['tasks'] == 0
@@ -126,7 +126,7 @@ def test_two_users_isolated_across_files_jobs_zip_ocr_templates_dashboard(identi
     assert alice.get('/api/dashboard').json()['channels'] == []
     for url in ('/api/channels', '/api/admin/users'):
         assert bob.get(url).status_code == 403
-    for url in ('/api/generate/multi-image', '/api/generate/batch', '/api/task/create', '/api/edit/advanced'):
+    for url in ('/api/generate/batch', '/api/task/create', '/api/edit/advanced'):
         assert bob.post(url, json={}).status_code == 403
     cat_a = alice.post('/api/prompt-categories', json={'name': '同名'}).json()
     assert bob.post('/api/prompt-categories', json={'name': '同名'}).status_code == 201

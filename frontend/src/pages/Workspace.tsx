@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Alert,
   Button,
@@ -28,6 +28,8 @@ import {
   cancelTask,
   generateMultiImage,
   uploadFiles,
+  api,
+  promptError,
   type AnalysisFile,
   type UploadedFile,
 } from '../api/client'
@@ -50,6 +52,14 @@ const terminalStatuses = ['completed', 'partial_failed', 'failed', 'cancelled']
 export function Workspace() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  const [available, setAvailable] = useState<number | null>(null)
+  const submission = useRef<{ payload: string; key: string } | null>(null)
+  useEffect(() => {
+    const refresh = () => api.get('/account/credits').then(r => setAvailable(r.data.available)).catch(() => setAvailable(null))
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 10000)
+    return () => window.clearInterval(timer)
+  }, [])
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [analysis, setAnalysis] = useState<AnalysisFile[]>([])
   const [ocrEnabled, setOcrEnabled] = useState(false)
@@ -180,22 +190,29 @@ export function Workspace() {
     )
     setSubmitting(true)
     try {
-      const result = await generateMultiImage({
+      const payload = {
         source_ids: sourceIds,
         mode,
         prompt,
         aspect_ratios: ratios,
         reference_file_id: referenceId,
         reference_component: component,
-        ocr_enabled: ocrEnabled && mode === 'shared',
+        ocr_enabled: isAdmin && ocrEnabled && mode === 'shared',
         per_source_overrides: overrides,
         quality,
-      })
+      }
+      const preview = (await api.post('/generate/preview', payload)).data
+      setAvailable(preview.available)
+      if (preview.required_credits > preview.available) { message.error('可用积分不足，请充值后重试；未扣除积分'); return }
+      const serialized = JSON.stringify(payload)
+      if (submission.current?.payload !== serialized) submission.current = { payload: serialized, key: crypto.randomUUID() }
+      const result = await generateMultiImage(payload, submission.current!.key)
+      submission.current = null
       setTaskId(result.task_id)
       sessionStorage.setItem('workspace-task-id', result.task_id)
       message.success('任务已提交，可继续提交其他任务；所有任务共享并发额度')
     } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : '任务提交失败')
+      message.error(promptError(reason))
     } finally {
       setSubmitting(false)
     }
@@ -363,7 +380,7 @@ export function Workspace() {
                 </Space>
                 <Alert
                   type="info"
-                  message={isAdmin ? `预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}，预计费用 ¥${(expectedCount * 0.05).toFixed(2)}` : '生图功能正在准备中，暂未开放，不扣除积分。可以上传素材和识别文字。'}
+                  message={isAdmin ? `预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}，预计费用 ¥${(expectedCount * 0.05).toFixed(2)}` : `预计生成 ${sourceIds.length * ratios.length} 张，需要 ${sourceIds.length * ratios.length} 积分；可用 ${available ?? '加载中'}。成功扣费，最终失败或取消释放；文字识别免费。`}
                 />
               </Space>
             </Card>
@@ -404,7 +421,7 @@ export function Workspace() {
                   type="primary"
                   icon={<PlayCircleOutlined />}
                   loading={submitting}
-                  disabled={!isAdmin || !files.length || uploading || analyzing}
+                  disabled={!files.length || uploading || analyzing || (!isAdmin && (available === null || available < sourceIds.length * ratios.length))}
                   onClick={() => void generate()}
                 >
                   提交批量任务
@@ -446,7 +463,7 @@ export function Workspace() {
                     排队 {task?.jobs.filter((job) => job.status === 'pending').length ?? 0}
                   </Typography.Text>
                   <Typography.Text>全局并发上限 {task?.max_concurrency ?? '—'}</Typography.Text>
-                  <Typography.Text>预计 ¥{(task?.estimated_cost ?? 0).toFixed(2)}</Typography.Text>
+                  {isAdmin ? <Typography.Text>预计 ¥{(task?.estimated_cost ?? 0).toFixed(2)}</Typography.Text> : <Typography.Text>已扣 {task?.credit_summary?.settled ?? 0} · 冻结 {task?.credit_summary?.frozen ?? 0} · 释放 {task?.credit_summary?.released ?? 0} 积分</Typography.Text>}
                   <Popconfirm
                     title="确定取消本次任务吗？"
                     description="排队中的步骤会停止，正在执行的步骤可能在当前请求结束后停止。"

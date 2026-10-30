@@ -13,8 +13,18 @@ from backend.services.mask_generator import create_mask
 from PIL import Image
 from backend.services.multi_image import fit_output
 from backend.services.channels import ChannelPool, ChannelUnavailable
+from backend.services import credits
+from backend.db.task_store import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+async def _join_jobs(coroutines) -> None:
+    # Drain sibling work before a caller finalizes the task and releases credits.
+    results = await asyncio.gather(*coroutines, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
 
 
 class TaskManager:
@@ -29,6 +39,7 @@ class TaskManager:
         self.running_tasks: dict[str, asyncio.Task[None]] = {}
         self.channel_pool = channel_pool
         self.assignments: dict[str, dict] = {}
+        self.user_semaphores: dict[str, asyncio.Semaphore] = {}
 
     async def create_single_job(
         self,
@@ -176,6 +187,22 @@ class TaskManager:
         Passing every job back to the source chain is intentional: completed
         jobs are skipped while their output is used as the next chain input.
         """
+        # A durable completion receipt bridges filesystem output and DB commit.
+        receipt_dir = self.data_dir / 'receipts'
+        for receipt in receipt_dir.glob('*.json'):
+            try:
+                data = json.loads(receipt.read_text(encoding='utf-8'))
+            except (ValueError, OSError):
+                logger.warning('Ignoring unreadable completion receipt %s', receipt.name)
+                continue
+            job = self.store.get_job(data['job_id'])
+            if job and job['status'] != 'done' and not job['cancel_requested'] and data.get('execution_token') == credits.execution_token(self.store, job['id']) and Path(data['output_path']).is_file():
+                self.store.update_job(job['id'], status='done', output_path=data['output_path'], error=None)
+        with self.store.transaction() as db:
+            credits.begin(db)
+            db.execute("UPDATE generation_attempts SET status='unknown',ended_at=? WHERE ended_at IS NULL", (utc_now(),))
+            for row in db.execute('SELECT id,status FROM tasks').fetchall():
+                credits.reconcile_task(db, row['id'], row['status'] in ('completed', 'partial_failed', 'failed', 'cancelled'))
         for task in self.store.list_active_tasks():
             if task["id"] in self.running_tasks:
                 continue
@@ -204,6 +231,13 @@ class TaskManager:
                 for job in self.store.get_jobs(task_id):
                     source_jobs.setdefault(job["source_id"], []).append(dict(job))
             self.store.finalize_task(task_id)
+        except Exception:
+            logger.exception('Task %s stopped unexpectedly', task_id)
+            for job in self.store.get_jobs(task_id):
+                if job['status'] in ('pending', 'processing'):
+                    self.store.update_job(job['id'], status='failed', error='execution_interrupted')
+            self.store.finalize_task(task_id)
+            raise
         finally:
             self.assignments.pop(task_id, None)
 
@@ -228,7 +262,7 @@ class TaskManager:
                     self.store.update_job(job["id"], channel_name=channels[index % len(channels)].config["name"])
             self.assignments[task_id] = assigned
         try:
-            await asyncio.gather(*(self._run_source_chain(task_id, source_id, jobs, rule) for source_id, jobs in source_jobs.items()))
+            await _join_jobs(self._run_source_chain(task_id, source_id, jobs, rule) for source_id, jobs in source_jobs.items())
         finally:
             self.assignments.pop(task_id, None)
 
@@ -256,7 +290,7 @@ class TaskManager:
                 current_input = Path(completed["output_path"])
             for variant in variants:
                 variant["input_path"] = str(current_input)
-            await asyncio.gather(*(self._run_job_with_retries(task_id, variant, rule) for variant in variants))
+            await _join_jobs(self._run_job_with_retries(task_id, variant, rule) for variant in variants)
             return
         for job_data in jobs:
             if current_input is not None:
@@ -288,10 +322,21 @@ class TaskManager:
             return scaled
 
     async def _run_job_with_retries(self, task_id: str, job_data: dict[str, str], rule: dict) -> None:
+        task = self.store.get_task(task_id)
+        if task and task['billable']:
+            # Conservative cross-task limit until membership quotas arrive in P3.
+            semaphore = self.user_semaphores.setdefault(task['owner_id'], asyncio.Semaphore(1))
+            async with semaphore:
+                await self._execute_job(task_id, job_data, rule)
+        else:
+            await self._execute_job(task_id, job_data, rule)
+
+    async def _execute_job(self, task_id: str, job_data: dict[str, str], rule: dict) -> None:
         runtime = self.assignments.get(task_id, {}).get(job_data["id"])
         stored = self.store.get_job(job_data["id"])
         retry_offset = stored["retry_count"] if runtime and stored else 0
         for attempt in range(1 if runtime else self.max_retries + 1):
+            attempt_id = None
             job = self.store.get_job(job_data["id"])
             if job is None or job["status"] == "done":
                 return
@@ -310,14 +355,26 @@ class TaskManager:
                         self.store.update_job(job_data["id"], status="cancelled")
                         return
                     def mark_processing():
+                        nonlocal attempt_id
                         current = self.store.get_job(job_data["id"])
                         if current is None or current["cancel_requested"]:
                             return False
+                        task = self.store.get_task(task_id)
+                        if task and task['billable']:
+                            with self.store.transaction() as db:
+                                user = db.execute('SELECT disabled FROM users WHERE id=?', (task['owner_id'],)).fetchone()
+                            if not user or user['disabled']:
+                                self.store.update_job(job_data['id'], status='cancelled', cancel_requested=1, error='account_disabled')
+                                return False
+                        attempt_id = uuid4().hex
+                        with self.store.transaction() as db:
+                            db.execute("INSERT INTO generation_attempts (id,job_id,started_at,status) VALUES (?,?,?,'started')", (attempt_id, job_data['id'], utc_now()))
                         self.store.update_job(job_data["id"], status="processing", retry_count=retry_offset + attempt, input_path=str(input_path))
                         return True
 
                     if runtime is None:
-                        mark_processing()
+                        if not mark_processing():
+                            return
                     mask_path = self._scaled_mask(Path(job_data["mask_path"]), input_path, job_data["id"])
                     output_options = rule.get("outputs", {}).get(job_data["id"], {})
                     edit = self.editor.edit if runtime is None else lambda **kwargs: self.channel_pool.edit(runtime, on_start=mark_processing, **kwargs)
@@ -332,8 +389,20 @@ class TaskManager:
                 job = self.store.get_job(job_data["id"])
                 if job and job["cancel_requested"]:
                     self.store.update_job(job_data["id"], status="cancelled", error="cancelled_after_response")
+                    if attempt_id:
+                        with self.store.transaction() as db:
+                            db.execute("UPDATE generation_attempts SET ended_at=?,status='done',response_after_cancel=1 WHERE id=?", (utc_now(), attempt_id))
                     return
+                receipt_dir = self.data_dir / 'receipts'
+                receipt_dir.mkdir(parents=True, exist_ok=True)
+                receipt = receipt_dir / f"{job_data['id']}.json"
+                temporary = receipt.with_suffix('.tmp')
+                temporary.write_text(json.dumps({'job_id': job_data['id'], 'output_path': str(output_path), 'execution_token': credits.execution_token(self.store, job_data['id'])}), encoding='utf-8')
+                temporary.replace(receipt)
                 self.store.update_job(job_data["id"], status="done", output_path=str(output_path), error=None)
+                if attempt_id:
+                    with self.store.transaction() as db:
+                        db.execute("UPDATE generation_attempts SET ended_at=?,status='done' WHERE id=?", (utc_now(), attempt_id))
                 return
             except ChannelUnavailable as exc:
                 self.store.update_job(job_data["id"], status="failed", error=str(exc), retry_count=retry_offset + attempt)
@@ -350,3 +419,7 @@ class TaskManager:
                     self.store.update_job(job_data["id"], status="failed", error=str(exc), retry_count=retry_offset + attempt)
                     return
                 await asyncio.sleep(min(2 ** attempt, 8))
+            finally:
+                if attempt_id:
+                    with self.store.transaction() as db:
+                        db.execute("UPDATE generation_attempts SET ended_at=?,status='unknown' WHERE id=? AND ended_at IS NULL", (utc_now(), attempt_id))

@@ -9,6 +9,7 @@ const items = [
   { key: '/', label: '首页' },
   { key: '/workspace', label: '工作台' },
   { key: '/tasks', label: '任务历史' },
+  { key: '/account/credits', label: '我的积分' },
   { key: '/composite', label: '长图拼接' },
   { key: '/prompts', label: '提示词管理' },
   { key: '/channels', label: '渠道管理' },

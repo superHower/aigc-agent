@@ -62,6 +62,9 @@ def validate(store, media_dir=None):
                 if not Path(path).is_file():
                     report['missing_files'].append(path)
     report['ok'] = not (any(report['unowned'].values()) or report['missing_files'] or report['foreign_key_errors'])
+    from backend.services.credits import audit_balances
+    report['credit_mismatches'] = audit_balances(store)
+    report['ok'] = report['ok'] and not report['credit_mismatches']
     return report
 
 
@@ -143,6 +146,7 @@ def import_sqlite(source: Path, target: TaskStore):
             raise ValueError('请先对 SQLite 演练副本执行 migrate 和 init-admin')
         versions = [r[0] for r in original.execute('SELECT version FROM schema_migrations ORDER BY version')]
         tables = ['users', 'sessions', 'system_settings', 'sms_challenges', 'auth_limits', 'files', 'prompt_categories', 'prompt_templates', 'analyses', 'tasks', 'jobs', 'audit_logs', 'channels', 'channel_metadata']
+        tables += ['credit_accounts', 'credit_lots', 'trial_claims', 'credit_entries', 'credit_reservations', 'credit_allocations', 'business_requests', 'generation_attempts']
         available = {r[0] for r in original.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         with target.transaction() as db:
             db.execute('BEGIN')

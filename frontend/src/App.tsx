@@ -9,6 +9,7 @@ import { lazy, Suspense } from 'react'
 import { Spin } from 'antd'
 import { Login } from './pages/Login'
 import { PhoneAuth } from './pages/PhoneAuth'
+import { Credits } from './pages/Credits'
 import { AuthProvider, RequireAuth } from './components/AuthProvider'
 
 const Dashboard = lazy(() =>
@@ -33,6 +34,7 @@ export function App() {
           }
         />
         <Route path="/workspace" element={<Workspace />} />
+        <Route path="/account/credits" element={<Credits />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/composite" element={<Composite />} />

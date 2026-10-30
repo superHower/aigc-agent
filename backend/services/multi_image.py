@@ -93,4 +93,6 @@ def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[s
 def fit_output(path: Path, width: int, height: int) -> None:
     with Image.open(path) as image:
         result = ImageOps.pad(image.convert("RGB"), (width, height), method=Image.Resampling.LANCZOS, color="white")
-        result.save(path, "PNG")
+        temporary = path.with_suffix(path.suffix + '.tmp')
+        result.save(temporary, "PNG")
+    temporary.replace(path)

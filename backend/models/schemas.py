@@ -238,6 +238,7 @@ class JobView(BaseModel):
 
 
 class TaskView(BaseModel):
+    credit_summary: dict[str, int] = Field(default_factory=dict)
     auto_retry_count: int = 0
     auto_retry_limit: int = 3
     channel_errors: list[str] = Field(default_factory=list)

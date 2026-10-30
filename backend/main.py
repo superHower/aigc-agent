@@ -25,6 +25,8 @@ from backend.routes.channels import router as channels_router
 from backend.routes.dashboard import router as dashboard_router
 from backend.routes.auth import router as auth_router, account, csrf_valid
 from backend.routes.admin import router as admin_router
+from backend.routes.accounts import router as accounts_router
+from backend.services import credits
 from backend.services.access import current_user, require_file, require_task, visible_job
 from backend.services.channels import ChannelStore, ChannelPool
 from backend.db.task_store import TaskStore, utc_now
@@ -124,6 +126,7 @@ app.include_router(channels_router)
 app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(accounts_router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -147,7 +150,7 @@ async def migration_access(request: Request, call_next):
             if user is None:
                 return JSONResponse({'detail': '请先登录'}, status_code=401)
             request.state.user = user
-            if user['role'] != 'admin' and (path.startswith(('/api/channels', '/api/admin/', '/api/generate/', '/api/edit/')) or path == '/api/task/create' or path.endswith('/retry')):
+            if user['role'] != 'admin' and (path.startswith(('/api/channels', '/api/admin/', '/api/edit/')) or path in ('/api/task/create', '/api/generate/batch')):
                 return JSONResponse({'detail': '此功能尚未向普通用户开放，未扣除积分'}, status_code=403)
             if request.method not in ('GET', 'HEAD') and not csrf_valid(request, user):
                 return JSONResponse({'detail': 'CSRF 校验失败，请刷新后重试'}, status_code=403)
@@ -409,12 +412,24 @@ async def generate_batch(payload: BatchRequest, request: Request):
 @app.post("/api/generate/multi-image")
 async def generate_multi_image(payload: MultiImageRequest, request: Request):
     current = state(request)
+    user = current_user(request)
+    key = credits.require_key(request) if user['role'] != 'admin' else request.headers.get('Idempotency-Key')
+    digest = credits.fingerprint(payload.model_dump())
+    if key:
+        with current.store.transaction() as db:
+            existing = credits.previous(db, user['id'], 'create', key, digest)
+        if existing:
+            return {'task_id': existing, 'status': current.store.get_task(existing)['status'], 'total_jobs': len(current.store.get_jobs(existing)), 'estimated_cost': 0}
+    if user['role'] != 'admin' and payload.ocr_enabled:
+        raise HTTPException(403, '文字生图编辑尚未开放；识别免费，未扣除积分')
     file_ids = list(payload.source_ids)
     if payload.reference_file_id:
         file_ids.append(payload.reference_file_id)
     sources = current.store.get_files(file_ids)
     if any(file_id not in sources for file_id in file_ids):
         raise HTTPException(status_code=404, detail="source or reference file not found")
+    for file_id in file_ids:
+        require_file(request, file_id, purposes={'source', 'output', 'composite'})
     analyses = {}
     if payload.ocr_enabled:
         for source_id in payload.source_ids:
@@ -426,9 +441,21 @@ async def generate_multi_image(payload: MultiImageRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     task_id = f"task_{uuid4().hex}"
-    current.store.create_batch(task_id, source_ids, rule, jobs)
-    await current.manager.create_batch(task_id, source_jobs, rule)
-    return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "estimated_cost": round(len(jobs) * 0.05, 2)}
+    task_id, created = current.store.create_batch(task_id, source_ids, rule, jobs, owner_id=user['id'], billable=user['role'] != 'admin', key=key, digest=digest)
+    if created:
+        await current.manager.create_batch(task_id, source_jobs, rule)
+    return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "required_credits": sum(bool(o.get('variant')) for o in rule['outputs'].values()) if user['role'] != 'admin' else 0, "estimated_cost": round(len(jobs) * 0.05, 2) if user['role'] == 'admin' else 0}
+
+
+@app.post('/api/generate/preview')
+async def generation_preview(payload: MultiImageRequest, request: Request):
+    ids = payload.source_ids + ([payload.reference_file_id] if payload.reference_file_id else [])
+    for file_id in ids:
+        require_file(request, file_id, purposes={'source', 'output', 'composite'})
+    count = len(payload.source_ids) * len(payload.aspect_ratios)
+    user = current_user(request)
+    available = credits.balance(state(request).store, user['id'])['available']
+    return {'images': count, 'required_credits': count if user['role'] != 'admin' else 0, 'available': available}
 
 
 @app.post("/api/prompt/preview", response_model=PromptPreviewResponse)
@@ -553,6 +580,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
             "completed_jobs": sum(job.status == "done" for job in source_jobs),
         })
     return TaskView(
+        credit_summary=task_credit_summary(current.store, task_id),
         auto_retry_count=task["auto_retry_count"],
         id=task["id"], status=task["status"], created_at=task["created_at"],
         updated_at=task["updated_at"], total_jobs=len(jobs),
@@ -564,6 +592,13 @@ def task_view(request: Request, task_id: str) -> TaskView:
         channel_errors=list(dict.fromkeys(job.error for job in views if job.error and job.error.startswith("渠道「"))),
         estimated_cost=round(len(jobs) * 0.05, 2) if current_user(request)["role"] == "admin" else 0, max_concurrency=sum(row["concurrency"] for row in current.channels.available()) if hasattr(current, "channels") else current.settings.max_concurrency,
     )
+
+
+def task_credit_summary(store, task_id):
+    with store.transaction() as db:
+        rows = db.execute('''SELECT r.state,COUNT(*) AS amount FROM credit_reservations r JOIN jobs j ON j.id=r.job_id
+            WHERE j.task_id=? GROUP BY r.state''', (task_id,)).fetchall()
+    return {row['state']: row['amount'] for row in rows}
 
 
 @app.get("/api/task/{task_id}", response_model=TaskView)
@@ -620,7 +655,17 @@ async def download_task(task_id: str, request: Request):
 @app.post("/api/task/{task_id}/retry")
 async def retry_task(task_id: str, payload: RetryRequest, request: Request):
     current = state(request)
-    require_task(request, task_id)
+    task = require_task(request, task_id)
+    user = current_user(request)
+    if task['billable'] or user['role'] != 'admin':
+        created = credits.retry(current.store, task['owner_id'], task_id, payload.job_id, credits.require_key(request))
+        if created:
+            jobs = current.store.get_jobs(task_id)
+            chains = {}
+            for job in jobs:
+                chains.setdefault(job['source_id'], []).append(dict(job))
+            await current.manager.create_batch(task_id, chains, json.loads(current.store.get_task(task_id)['edit_rule']))
+        return {'task_id': task_id, 'status': current.store.get_task(task_id)['status']}
     try:
         await current.manager.retry(task_id, payload.job_id)
     except ValueError as exc:
