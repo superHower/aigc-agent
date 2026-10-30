@@ -150,7 +150,7 @@ async def migration_access(request: Request, call_next):
             return JSONResponse({'status': 'ok'})
         if path == '/api/packages' and request.method == 'GET':
             return await call_next(request)
-        if path in ('/api/auth/login', '/api/auth/sms', '/api/auth/register', '/api/auth/reset-password'):
+        if path in ('/api/auth/login', '/api/auth/captcha', '/api/auth/sms', '/api/auth/register', '/api/auth/reset-password'):
             origin = request.headers.get('origin')
             allowed = os.getenv('FRONTEND_ORIGINS', 'http://localhost:5173').split(',')
             if origin and origin not in [v.strip() for v in allowed] and origin != str(request.base_url).rstrip('/'):
@@ -430,6 +430,10 @@ async def generate_multi_image(payload: MultiImageRequest, request: Request):
             existing = credits.previous(db, user['id'], 'create', key, digest)
         if existing:
             return {'task_id': existing, 'status': current.store.get_task(existing)['status'], 'total_jobs': len(current.store.get_jobs(existing)), 'estimated_cost': 0}
+    with current.store.transaction() as db:
+        active_existing = credits.active_previous(db, user['id'], 'create', digest)
+    if active_existing:
+        return {'task_id': active_existing, 'status': current.store.get_task(active_existing)['status'], 'total_jobs': len(current.store.get_jobs(active_existing)), 'estimated_cost': 0}
     if user['role'] != 'admin' and payload.ocr_enabled:
         raise HTTPException(403, '文字生图编辑尚未开放；识别免费，未扣除积分')
     file_ids = list(payload.source_ids)
@@ -617,16 +621,17 @@ async def get_task(task_id: str, request: Request):
 
 
 @app.get("/api/tasks")
-async def list_tasks(request: Request, limit: int = 50, offset: int = 0):
+async def list_tasks(request: Request, limit: int = 20, offset: int = 0):
     current = state(request)
     if limit < 1 or limit > 100 or offset < 0:
         raise HTTPException(status_code=422, detail="invalid pagination")
     items = []
     user = current_user(request)
-    for task in current.store.list_tasks(limit=limit, offset=offset, owner_id=user["id"] if user["role"] != "admin" else None):
+    owner_id = user["id"] if user["role"] != "admin" else None
+    for task in current.store.list_tasks(limit=limit, offset=offset, owner_id=owner_id):
         view = task_view(request, task["id"])
         items.append(view.model_dump(mode="json"))
-    return {"items": items, "limit": limit, "offset": offset}
+    return {"items": items, "limit": limit, "offset": offset, "total": current.store.count_tasks(owner_id)}
 
 
 @app.get("/api/task/{task_id}/download")

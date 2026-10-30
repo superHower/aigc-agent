@@ -54,4 +54,4 @@ def readiness(request: Request):
     with request.app.state.store.transaction() as db:
         active_packages = db.execute("SELECT COUNT(*) FROM packages WHERE status='active'").fetchone()[0]
         code = bool(db.execute('SELECT id FROM payment_codes WHERE active=1').fetchone())
-    return {'database': 'postgresql' if request.app.state.store.postgres else 'sqlite', 'sms_mode': os.getenv('SMS_MODE', 'disabled'), 'secure_cookie': os.getenv('COOKIE_SECURE', 'false').lower() == 'true', 'active_packages': active_packages, 'payment_code_active': code, 'executor': 'single_process', 'external_acceptance': '真实短信、收款账户核对、HTTPS 和备份恢复演练需操作者验收；配置状态不代表验收通过。'}
+    return {'database': 'postgresql' if request.app.state.store.postgres else 'sqlite', 'verification_mode': '图形 CAPTCHA', 'secure_cookie': os.getenv('COOKIE_SECURE', 'false').lower() == 'true', 'active_packages': active_packages, 'payment_code_active': code, 'executor': 'single_process', 'external_acceptance': '收款账户核对、HTTPS 和备份恢复演练需操作者验收；配置状态不代表验收通过。'}

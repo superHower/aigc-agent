@@ -117,6 +117,15 @@ def previous(db, user_id, operation, key, digest):
     return row['task_id'] if row else None
 
 
+def active_previous(db, user_id, operation, digest):
+    """Find an in-flight equivalent even if the client generated a new key."""
+    row = db.execute('''SELECT r.task_id FROM business_requests r JOIN tasks t ON t.id=r.task_id
+        WHERE r.user_id=? AND r.operation=? AND r.fingerprint=?
+          AND t.status IN ('queued','running','cancelling')
+        ORDER BY r.created_at DESC LIMIT 1''', (user_id, operation, digest)).fetchone()
+    return row['task_id'] if row else None
+
+
 def record_request(db, user_id, operation, key, digest, task_id):
     db.execute('INSERT INTO business_requests VALUES (?,?,?,?,?,?)', (user_id, operation, key, digest, task_id, utc_now()))
 

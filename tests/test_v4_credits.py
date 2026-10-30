@@ -146,6 +146,24 @@ def test_registration_grant_atomic_and_billed_api(identity_app, monkeypatch):
         assert db.execute('SELECT COUNT(*) FROM tasks WHERE owner_id=?', (user_id,)).fetchone()[0] == 1
 
 
+def test_same_active_generation_reuses_task_with_new_idempotency_key(identity_app, monkeypatch):
+    from backend.main import app
+    store, codes, _ = identity_app
+    client, user_id = signup(codes, '13800000011', 'active_user')
+    source = image_upload(client)
+    class ActiveManager:
+        async def create_batch(self, task_id, chains, rule):
+            return None
+    monkeypatch.setattr(app.state, 'manager', ActiveManager(), raising=False)
+    payload = {'source_ids': [source], 'prompt': 'same', 'aspect_ratios': ['original']}
+    first = client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'active-one'})
+    second = client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'active-two'})
+    assert first.status_code == second.status_code == 200
+    assert first.json()['task_id'] == second.json()['task_id']
+    with store.transaction() as db:
+        assert db.execute('SELECT COUNT(*) FROM tasks WHERE owner_id=?', (user_id,)).fetchone()[0] == 1
+
+
 def test_executor_cancellation_late_response_and_recovery_release(ledger, tmp_path):
     create(ledger, 'task', 2)
     image = tmp_path/'input.png'

@@ -2,6 +2,7 @@ fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 openai>=1.50,<2
 pillow>=10.4,<13
+captcha>=0.7,<1
 python-multipart>=0.0.9,<1
 python-magic>=0.4.27,<1
 python-dotenv>=1.0,<2

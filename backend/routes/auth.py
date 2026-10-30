@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from pydantic import field_validator
 
 from backend.services.passwords import verify_password, DUMMY_HASH
-from backend.services import identity
+from backend.services import identity, captcha
 
 router = APIRouter(prefix='/api/auth', tags=['authentication'])
 
@@ -87,7 +87,8 @@ class Registration(BaseModel):
     username: str
     phone: str
     password: str = Field(min_length=8, max_length=64)
-    code: str = Field(pattern=r'^[0-9]{6}$')
+    captcha_id: str = Field(min_length=20, max_length=100)
+    code: str = Field(pattern=r'^[A-Za-z0-9]{5}$')
 
     @field_validator('username')
     @classmethod
@@ -113,18 +114,23 @@ class Reset(BaseModel):
 
 @router.post('/sms')
 def sms(payload: SmsInput, request: Request):
-    identity.issue_sms(request.app.state.store, payload.phone, payload.purpose, request.client.host if request.client else 'unknown')
-    return {'ok': True, 'retry_after': 60, 'expires_in': 300}
+    raise HTTPException(410, '已改用图形验证码，请刷新页面')
+
+
+@router.get('/captcha')
+def image_captcha(request: Request, response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return captcha.issue(request.app.state.store, request.client.host if request.client else 'unknown')
 
 
 @router.post('/register', status_code=201)
 def register(payload: Registration, request: Request):
-    return identity.register(request.app.state.store, payload.username, payload.phone, payload.password, payload.code)
+    return captcha.register(request.app.state.store, payload.username, payload.phone, payload.password, payload.captcha_id, payload.code)
 
 
 @router.post('/reset-password')
 def reset_password(payload: Reset, request: Request):
-    return identity.reset_password(request.app.state.store, payload.phone, payload.password, payload.code)
+    raise HTTPException(403, '请联系管理员核实身份后重置密码')
 
 
 @router.get('/me')

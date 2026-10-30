@@ -6,9 +6,9 @@ import {
   Checkbox,
   Col,
   Image,
+  Popconfirm,
   Input,
   Layout,
-  Popconfirm,
   Progress,
   Row,
   Select,
@@ -104,6 +104,20 @@ export function Workspace() {
         )
       : 0
   const fileOptions = files.map((file) => ({ value: file.file_id, label: file.filename }))
+
+  const removeFile = (fileId: string) => {
+    setFiles((previous) => {
+      const next = previous.filter((file) => file.file_id !== fileId)
+      if (selectedFile === fileId) {
+        setSelectedFile(next[0]?.file_id ?? null)
+        setActiveBlockId(null)
+      }
+      return next
+    })
+    setAnalysis((previous) => previous.filter((item) => item.file_id !== fileId))
+    setTargets((previous) => previous.filter((id) => id !== fileId))
+    setReferenceId((previous) => previous === fileId ? undefined : previous)
+  }
 
   const analyze = async (uploaded: UploadedFile[]) => {
     if (!uploaded.length) return
@@ -236,15 +250,6 @@ export function Workspace() {
           <Col xs={24} lg={9}>
             <Card title="上传图片" className="panel-card" extra={<Tag>{files.length} / 50</Tag>}>
               <Space wrap className="option-row">
-                <Switch
-                  checked={ocrEnabled && mode === 'shared'}
-                  disabled={mode === 'reference' || uploading || analyzing}
-                  onChange={(enabled) => {
-                    setOcrEnabled(enabled)
-                    if (enabled) void analyze(files)
-                  }}
-                />
-                <Typography.Text>启用 OCR 文字识别（默认关闭）</Typography.Text>
                 {ocrEnabled && mode === 'shared' && (
                   <Button
                     size="small"
@@ -272,20 +277,17 @@ export function Workspace() {
                 </p>
               </Upload.Dragger>
               <div className="uploaded-grid">
-                {files.map((file) => (
-                  <button
-                    type="button"
-                    className={`uploaded-item ${file.file_id === currentFile?.file_id ? 'uploaded-item-active' : ''}`}
-                    key={file.file_id}
-                    onClick={() => {
-                      setSelectedFile(file.file_id)
-                      setActiveBlockId(null)
-                    }}
-                  >
-                    <img src={file.url} alt={file.filename} />
-                    <span title={file.filename}>{file.filename}</span>
-                  </button>
-                ))}
+                  {files.map((file) => (
+                    <div className={`uploaded-item-wrap ${file.file_id === currentFile?.file_id ? 'uploaded-item-active' : ''}`} key={file.file_id}>
+                      <button type="button" className="uploaded-item" onClick={() => { setSelectedFile(file.file_id); setActiveBlockId(null) }}>
+                        <img src={file.url} alt={file.filename} />
+                        <span title={file.filename}>{file.filename}</span>
+                      </button>
+                      <Popconfirm title="移除这张图片？" description="只会从当前工作台移除，不删除服务器上的原文件。" okText="移除" cancelText="取消" onConfirm={() => removeFile(file.file_id)}>
+                        <Button className="uploaded-item-remove" type="text" danger size="small" aria-label={`删除${file.filename}`} onClick={(event) => event.stopPropagation()}>×</Button>
+                      </Popconfirm>
+                    </div>
+                  ))}
               </div>
               {currentFile &&
                 (ocrEnabled && mode === 'shared' && currentAnalysis ? (
@@ -420,7 +422,7 @@ export function Workspace() {
                   type="primary"
                   icon={<PlayCircleOutlined />}
                   loading={submitting}
-                  disabled={!files.length || uploading || analyzing || (!isAdmin && (available === null || available < sourceIds.length * ratios.length))}
+                  disabled={!files.length || uploading || analyzing || submitting || (!!task && !terminalStatuses.includes(task.status)) || (!isAdmin && (available === null || available < sourceIds.length * ratios.length))}
                   onClick={() => void generate()}
                 >
                   提交批量任务

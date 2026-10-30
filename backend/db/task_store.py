@@ -114,7 +114,11 @@ class TaskStore:
         with self._connect() as connection:
             return connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
 
-    def list_tasks(self, limit: int = 50, offset: int = 0, owner_id: str | None = None) -> list[sqlite3.Row]:
+    def count_tasks(self, owner_id: str | None = None) -> int:
+        with self._connect() as connection:
+            return connection.execute("SELECT COUNT(*) FROM tasks" + (" WHERE owner_id = ?" if owner_id else ""), (owner_id,) if owner_id else ()).fetchone()[0]
+
+    def list_tasks(self, limit: int = 20, offset: int = 0, owner_id: str | None = None) -> list[sqlite3.Row]:
         with self._connect() as connection:
             return connection.execute(
                 "SELECT * FROM tasks" + (" WHERE owner_id = ?" if owner_id else "") + " ORDER BY created_at DESC LIMIT ? OFFSET ?",

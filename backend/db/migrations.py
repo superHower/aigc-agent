@@ -225,6 +225,11 @@ def migrate(store):
             if channel_columns and 'estimated_cost_cents' not in channel_columns:
                 db.execute('ALTER TABLE channels ADD COLUMN estimated_cost_cents INTEGER')
             stamp(db, 7)
+        if 8 not in applied:
+            db.execute('''CREATE TABLE captcha_challenges (
+                id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires_at TEXT NOT NULL
+            )''')
+            stamp(db, 8)
 
 
 def stamp(db, version):

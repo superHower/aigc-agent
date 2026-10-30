@@ -64,7 +64,7 @@ export async function previewPrompt(payload: Record<string, string>) { return (a
 export async function generateBatch(payload: { source_ids: string[]; edit_rule: Record<string, unknown>; per_source_overrides: Record<string, unknown> }) { return (await api.post<{ task_id: string }>('/generate/batch', payload)).data }
 export async function getTask(taskId: string) { return (await api.get<Task>(`/task/${taskId}`)).data }
 export async function generateMultiImage(payload: Record<string, unknown>, key: string) { return (await api.post<{ task_id: string; total_jobs: number; estimated_cost: number }>('/generate/multi-image', payload, { headers: { 'Idempotency-Key': key } })).data }
-export async function listTasks() { return (await api.get<{ items: Task[] }>('/tasks')).data }
+export async function listTasks(page = 1, pageSize = 20) { return (await api.get<{ items: Task[]; total: number; limit: number; offset: number }>('/tasks', { params: { limit: pageSize, offset: (page - 1) * pageSize } })).data }
 export async function cancelTask(taskId: string) { return (await api.post(`/task/${taskId}/cancel`)).data }
 const retryKeys = new Map<string, string>()
 export async function retryTask(taskId: string, jobId?: string) {

@@ -11,7 +11,7 @@ from PIL import Image
 from backend.db.operations import bootstrap_admin
 from backend.db.task_store import TaskStore, utc_now
 from backend.main import app
-from backend.services import identity
+from backend.services import identity, captcha
 from backend.services.analyzer import Analyzer
 from tests.test_v4_migrations import postgres_store
 
@@ -28,13 +28,20 @@ def identity_app(tmp_path, monkeypatch, request):
     monkeypatch.setattr(app.state, 'analyzer', analyzer, raising=False)
     codes = {}
     monkeypatch.setattr(identity, 'send_sms', lambda number, purpose, code, challenge: codes.update({(number, purpose): code}))
+    original_issue = captcha.issue
+    def issue(store, ip):
+        result = original_issue(store, ip)
+        with store.transaction() as db:
+            db.execute('UPDATE captcha_challenges SET code_hash=? WHERE id=?', (identity.keyed(identity.secret(db), result['captcha_id'] + ':AB234'), result['captcha_id']))
+        return result
+    monkeypatch.setattr(captcha, 'issue', issue)
     return store, codes, admin_id
 
 
 def signup(codes, number, name):
     client = TestClient(app)
-    assert client.post('/api/auth/sms', json={'phone': number, 'purpose': 'register'}).status_code == 200
-    response = client.post('/api/auth/register', json={'username': name, 'phone': number, 'password': 'password-123', 'code': codes[(number, 'register')]})
+    challenge = client.get('/api/auth/captcha').json()
+    response = client.post('/api/auth/register', json={'username': name, 'phone': number, 'password': 'password-123', 'code': 'ab234', 'captcha_id': challenge['captcha_id']})
     assert response.status_code == 201, response.text
     assert client.post('/api/auth/login', json={'account': number, 'password': 'password-123'}).status_code == 200
     client.headers['X-CSRF-Token'] = client.cookies['csrf']
@@ -49,49 +56,43 @@ def image_upload(client, name='image.png'):
     return response.json()['files'][0]['file_id']
 
 
-def test_sms_limits_purpose_attempts_expiry_and_single_use(identity_app):
-    store, codes, _ = identity_app
+def test_captcha_expiry_single_attempt_and_single_use(identity_app):
+    store, _, _ = identity_app
     client = TestClient(app)
-    number = '13800000001'
-    assert client.post('/api/auth/sms', json={'phone': number, 'purpose': 'register'}).json() == {'ok': True, 'retry_after': 60, 'expires_in': 300}
-    assert client.post('/api/auth/sms', json={'phone': number, 'purpose': 'reset'}).status_code == 429
-    code = codes[(number, 'register')]
-    payload = {'phone': number, 'password': 'password-123', 'code': code}
-    assert client.post('/api/auth/reset-password', json=payload).status_code == 400
-    registration = {**payload, 'username': 'user_a'}
-    for _ in range(5):
-        assert client.post('/api/auth/register', json={**registration, 'code': '000000' if code != '000000' else '999999'}).status_code == 400
-    assert client.post('/api/auth/register', json=registration).status_code == 400
+    def challenge():
+        response = client.get('/api/auth/captcha')
+        assert response.headers['cache-control'] == 'no-store'
+        data = response.json()
+        assert data['image'].startswith('data:image/png;base64,') and 'code' not in data
+        return data['captcha_id']
+    payload = {'username': 'user_a', 'phone': '13800000001', 'password': 'password-123', 'code': 'AB234', 'captcha_id': challenge()}
+    assert client.post('/api/auth/register', json={**payload, 'code': 'XXXXX'}).status_code == 400
+    assert client.post('/api/auth/register', json=payload).status_code == 400
+    payload['captcha_id'] = challenge()
     with store.transaction() as db:
-        row = db.execute('SELECT * FROM sms_challenges').fetchone()
-        assert row['attempts'] == 5 and code not in row['code_hash']
-        db.execute('UPDATE sms_challenges SET attempts=0,expires_at=?', ((datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),))
-    assert client.post('/api/auth/register', json=registration).status_code == 400
-    with store.transaction() as db:
-        db.execute('UPDATE sms_challenges SET expires_at=?', ((datetime.now(timezone.utc)+timedelta(minutes=1)).isoformat(),))
-    assert client.post('/api/auth/register', json=registration).status_code == 201
-    assert client.post('/api/auth/register', json=registration).status_code == 400
-    assert client.post('/api/auth/register', json={**registration, 'username': '123456'}).status_code == 422
+        db.execute('UPDATE captcha_challenges SET expires_at=?', ((datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),))
+    assert client.post('/api/auth/register', json=payload).status_code == 400
+    payload['captcha_id'] = challenge()
+    assert client.post('/api/auth/register', json=payload).status_code == 201
+    assert client.post('/api/auth/register', json=payload).status_code == 400
+    assert client.post('/api/auth/sms', json={'phone': payload['phone'], 'purpose': 'register'}).status_code == 410
+    assert client.post('/api/auth/reset-password', json={'phone': payload['phone'], 'password': 'new-password', 'code': '123456'}).status_code == 403
 
 
-def test_reset_revokes_sessions_disable_remains_revoked(identity_app):
+def test_admin_reset_revokes_sessions_and_audits(identity_app):
     store, codes, _ = identity_app
     user, user_id = signup(codes, '13800000002', 'user_a')
-    assert TestClient(app).post('/api/auth/login', json={'account': 'USER_A', 'password': 'password-123'}).status_code == 200
-    with store.transaction() as db:
-        db.execute('UPDATE sms_challenges SET created_at=?', ((datetime.now(timezone.utc)-timedelta(minutes=2)).isoformat(),))
-    sender = TestClient(app)
-    assert sender.post('/api/auth/sms', json={'phone': '13800000002', 'purpose': 'reset'}).status_code == 200
-    assert sender.post('/api/auth/reset-password', json={'phone': '13800000002', 'code': codes[('13800000002', 'reset')], 'password': 'new-password-123'}).status_code == 200
-    assert user.get('/api/auth/me').status_code == 401
-    assert user.post('/api/auth/login', json={'account': 'user_a', 'password': 'password-123'}).status_code == 401
-    assert user.post('/api/auth/login', json={'account': 'user_a', 'password': 'new-password-123'}).status_code == 200
+    assert user.post(f'/api/admin/users/{user_id}/reset-password', json={'password': 'new-password-123', 'reason': 'verified'}).status_code == 403
     admin = TestClient(app)
     assert admin.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200
     admin.headers['X-CSRF-Token'] = admin.cookies['csrf']
-    for disabled in (True, False):
-        assert admin.post(f'/api/admin/users/{user_id}/status', json={'disabled': disabled, 'reason': 'test'}).status_code == 200
-        assert user.get('/api/tasks').status_code == 401
+    assert admin.post(f'/api/admin/users/{user_id}/reset-password', json={'password': 'new-password-123', 'reason': 'verified'}).status_code == 200
+    assert user.get('/api/auth/me').status_code == 401
+    assert user.post('/api/auth/login', json={'account': 'user_a', 'password': 'password-123'}).status_code == 401
+    assert user.post('/api/auth/login', json={'account': 'user_a', 'password': 'new-password-123'}).status_code == 200
+    with store.transaction() as db:
+        audit = db.execute("SELECT details FROM audit_logs WHERE action='user_password_reset'").fetchone()
+        assert audit and 'password' not in audit[0]
 
 
 def test_two_users_isolated_across_files_jobs_zip_ocr_templates_dashboard(identity_app, tmp_path):
@@ -171,4 +172,22 @@ def test_concurrent_registration_and_failed_sms(identity_app, monkeypatch):
         raise RuntimeError('secret gateway address')
     monkeypatch.setattr(identity, 'send_sms', unavailable)
     response = TestClient(app).post('/api/auth/sms', json={'phone': '13800000006', 'purpose': 'register'})
-    assert response.status_code == 503 and 'secret' not in response.text
+    assert response.status_code == 410 and 'secret' not in response.text
+
+
+def test_parallel_captcha_registration_and_issue_limit(identity_app):
+    store, _, _ = identity_app
+    client = TestClient(app)
+    challenge = client.get('/api/auth/captcha').json()
+    def register(index):
+        return TestClient(app).post('/api/auth/register', json={
+            'username': 'parallel_' + str(index), 'phone': '1380000002' + str(index),
+            'password': 'password-123', 'captcha_id': challenge['captcha_id'], 'code': 'AB234'}).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(register, range(2))) == [201, 400]
+    with store.transaction() as db:
+        assert db.execute('SELECT COUNT(*) FROM trial_claims').fetchone()[0] == 1
+        pepper = identity.secret(db)
+        identity.throttle(db, 'captcha:' + identity.keyed(pepper, 'testclient'), limit=60, minutes=5)
+        db.execute("UPDATE auth_limits SET attempts=60 WHERE key LIKE 'captcha:%'")
+    assert client.get('/api/auth/captcha').status_code == 429
