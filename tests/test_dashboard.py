@@ -56,6 +56,10 @@ def test_dashboard_api_validation_and_full_history(tmp_path):
     app = FastAPI()
     app.include_router(router)
     app.state.store = TaskStore(tmp_path / 'tasks.db')
+    @app.middleware('http')
+    async def admin_context(request, call_next):
+        request.state.user = {'id': 'admin', 'role': 'admin'}
+        return await call_next(request)
     for index in range(55):
         seed(app.state.store, f't{index}', '2026-10-29T12:00:00+00:00', ['done'])
     with TestClient(app) as client:

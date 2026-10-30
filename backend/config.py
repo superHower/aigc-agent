@@ -42,7 +42,8 @@ class Settings:
     max_retries: int
     data_dir: Path
     database_path: Path
-    frontend_origins: tuple[str, ...]
+    database_url: str | None = None
+    frontend_origins: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -68,6 +69,7 @@ class Settings:
             database_path=Path(
                 os.getenv("DATABASE_PATH", "./backend/data/tasks.db")
             ).resolve(),
+            database_url=os.getenv("DATABASE_URL") or None,
             frontend_origins=tuple(
                 origin.strip()
                 for origin in os.getenv(

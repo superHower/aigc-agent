@@ -30,6 +30,7 @@ import 'dayjs/locale/zh-cn'
 import zhCN from 'antd/es/date-picker/locale/zh_CN'
 import { Link } from 'react-router-dom'
 import { AppHeader } from '../components/AppHeader'
+import { useAuth } from '../components/AuthProvider'
 import { Chart } from '../components/Chart'
 import { getDashboard, promptError, type DashboardData } from '../api/client'
 
@@ -76,6 +77,8 @@ function Comparison({
 }
 
 export function Dashboard() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const [period, setPeriod] = useState<DashboardData['period']>('week')
   const [selectedDate, setSelectedDate] = useState(() => dayjs())
   const [data, setData] = useState<DashboardData>()
@@ -407,7 +410,7 @@ export function Dashboard() {
                     )}
                   </Card>
                 </Col>
-                <Col xs={24} xl={12}>
+                {isAdmin && <Col xs={24} xl={12}>
                   <Card
                     className="panel-card"
                     title="渠道出图排行"
@@ -432,7 +435,7 @@ export function Dashboard() {
                       按成功出图数排名，最多显示 8 个渠道；重试转移后归属最终执行渠道。
                     </Typography.Text>
                   </Card>
-                </Col>
+                </Col>}
                 <Col xs={24} xl={12}>
                   <Card
                     className="panel-card"
@@ -454,7 +457,7 @@ export function Dashboard() {
                         </div>
                       ))}
                     </div>
-                    <div className="dashboard-cost">
+                    {isAdmin && <div className="dashboard-cost">
                       <div>
                         <Typography.Text type="secondary">本周期基础预估费用</Typography.Text>
                         <div>
@@ -465,7 +468,7 @@ export function Dashboard() {
                         按计划步骤 × ¥0.05 估算
                         <br />含 OCR，不含重试；以实际账单为准
                       </Typography.Text>
-                    </div>
+                    </div>}
                   </Card>
                 </Col>
               </Row>

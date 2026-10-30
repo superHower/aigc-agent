@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from backend.services.access import require_admin
 
 from backend.services.channels import ChannelInput
 
-router = APIRouter(prefix="/api/channels", tags=["channels"])
+router = APIRouter(prefix="/api/channels", tags=["channels"], dependencies=[Depends(require_admin)])
 
 
 @router.get("")

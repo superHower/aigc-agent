@@ -61,7 +61,7 @@ class ChannelStore:
                 self.save(ChannelInput(name="默认渠道", model=settings.model_edit,
                                        base_url=settings.openai_base_url, api_key=settings.openai_api_key,
                                        concurrency=3))
-            connection.execute("INSERT OR IGNORE INTO channel_metadata VALUES ('seeded')")
+            connection.execute("INSERT INTO channel_metadata VALUES ('seeded') ON CONFLICT (key) DO NOTHING")
 
     def list(self) -> list[dict]:
         with self.store._connect() as connection:
@@ -84,7 +84,7 @@ class ChannelStore:
                "created_at": old["created_at"] if old else now, "updated_at": now}
         with self.store._connect() as connection:
             names = list(row)
-            connection.execute(f"INSERT OR REPLACE INTO channels ({','.join(names)}) VALUES ({','.join('?' for _ in names)})", tuple(row.values()))
+            connection.execute(f"INSERT INTO channels ({','.join(names)}) VALUES ({','.join('?' for _ in names)}) ON CONFLICT (id) DO UPDATE SET " + ','.join(f"{name}=excluded.{name}" for name in names if name != "id"), tuple(row.values()))
         return self.public(row)
 
     def delete(self, channel_id: str) -> None:

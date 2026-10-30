@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from backend.db.task_store import TaskStore
 
 
-def dashboard_stats(store: TaskStore, period: str, selected: date, offset: int) -> dict:
+def dashboard_stats(store: TaskStore, period: str, selected: date, offset: int, owner_id: str | None = None) -> dict:
     """Aggregate task cohorts; offset uses JavaScript's getTimezoneOffset convention."""
     local_zone = timezone(timedelta(minutes=-offset))
     if period == "day":
@@ -36,19 +36,19 @@ def dashboard_stats(store: TaskStore, period: str, selected: date, offset: int) 
                    SUM(CASE WHEN j.step NOT LIKE 'text_%' AND j.step NOT LIKE 'logo_%' AND j.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
                    SUM(CASE WHEN j.step NOT LIKE 'text_%' AND j.step NOT LIKE 'logo_%' AND j.status IN ('pending', 'processing') THEN 1 ELSE 0 END) AS active
             FROM tasks t LEFT JOIN jobs j ON j.task_id = t.id
-            WHERE julianday(t.created_at) >= julianday(?) AND julianday(t.created_at) < julianday(?)
+            WHERE julianday(t.created_at) >= julianday(?) AND julianday(t.created_at) < julianday(?) AND (CAST(? AS TEXT) IS NULL OR t.owner_id = ?)
             GROUP BY t.id
             ORDER BY t.created_at DESC
-        """, (previous_start.isoformat(), end.isoformat())).fetchall()
+        """, (previous_start.isoformat(), end.isoformat(), owner_id, owner_id)).fetchall()
         channels = connection.execute("""
             SELECT COALESCE(j.channel_name, '未分配渠道') AS name, COUNT(*) AS total,
                    SUM(j.status = 'done') AS done, SUM(j.status = 'failed') AS failed
             FROM jobs j JOIN tasks t ON t.id = j.task_id
-            WHERE julianday(t.created_at) >= julianday(?) AND julianday(t.created_at) < julianday(?)
+            WHERE julianday(t.created_at) >= julianday(?) AND julianday(t.created_at) < julianday(?) AND (CAST(? AS TEXT) IS NULL OR t.owner_id = ?)
               AND j.step NOT LIKE 'text_%' AND j.step NOT LIKE 'logo_%'
             GROUP BY COALESCE(j.channel_name, '未分配渠道')
             ORDER BY done DESC, total DESC, name
-        """, (start.isoformat(), end.isoformat())).fetchall()
+        """, (start.isoformat(), end.isoformat(), owner_id, owner_id)).fetchall()
 
     def summary(items):
         result = {key: sum(row[key] or 0 for row in items) for key in ("images", "done", "failed", "cancelled", "active", "steps")}
@@ -80,7 +80,7 @@ def dashboard_stats(store: TaskStore, period: str, selected: date, offset: int) 
         for key in ("done", "failed", "active"):
             bucket[key] += row[key] or 0
 
-    return {
+    result = {
         "period": period, "start_date": first.isoformat(), "end_date": (last - timedelta(days=1)).isoformat(),
         "previous_start_date": previous_start.date().isoformat(),
         "previous_end_date": (first - timedelta(days=1)).isoformat(),
@@ -91,3 +91,9 @@ def dashboard_stats(store: TaskStore, period: str, selected: date, offset: int) 
                               failed=row["failed"] or 0, auto_retry_count=row["auto_retry_count"]) for row in current[:6]],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+    if owner_id is not None:
+        result['channels'] = []
+        for key in ('summary', 'previous'):
+            result[key]['estimated_cost'] = 0
+    return result

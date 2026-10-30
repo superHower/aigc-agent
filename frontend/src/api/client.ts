@@ -1,6 +1,17 @@
 import axios from 'axios'
 
 export const api = axios.create({ baseURL: '/api', timeout: 120_000 })
+api.interceptors.request.use((config) => {
+  if (!['get', 'head', 'options'].includes(config.method ?? 'get')) {
+    const csrf = document.cookie.split('; ').find((item) => item.startsWith('csrf='))?.slice(5)
+    if (csrf) config.headers.set('X-CSRF-Token', decodeURIComponent(csrf))
+  }
+  return config
+})
+api.interceptors.response.use((response) => response, (error) => {
+  if (error.response?.status === 401 && !['/login', '/register', '/forgot-password'].includes(window.location.pathname)) window.location.assign('/login')
+  return Promise.reject(error)
+})
 
 export type DashboardSummary = {
   tasks: number; images: number; done: number; failed: number; cancelled: number

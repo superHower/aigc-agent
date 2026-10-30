@@ -1,6 +1,9 @@
 import { Layout } from 'antd'
 import { AppstoreOutlined } from '@ant-design/icons'
 import { NavLink, useLocation } from 'react-router-dom'
+import { api } from '../api/client'
+import { Button } from 'antd'
+import { useAuth } from './AuthProvider'
 
 const items = [
   { key: '/', label: '首页' },
@@ -12,6 +15,7 @@ const items = [
 ]
 
 export function AppHeader() {
+  const { user } = useAuth()
   const location = useLocation()
   const selectedKey =
     items.find((item) => item.key !== '/' && location.pathname.startsWith(item.key))?.key ?? '/'
@@ -24,7 +28,7 @@ export function AppHeader() {
         <span>AI 生图</span>
       </NavLink>
       <nav className="app-nav" aria-label="页面导航">
-        {items.map((item) => (
+        {items.filter((item) => item.key !== '/channels' || user?.role === 'admin').map((item) => (
           <NavLink
             key={item.key}
             to={item.key}
@@ -37,6 +41,7 @@ export function AppHeader() {
           </NavLink>
         ))}
       </nav>
+      <Button type="text" onClick={async () => { await api.post('/auth/logout'); window.location.assign('/login') }}>退出登录</Button>
     </Layout.Header>
   )
 }

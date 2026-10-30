@@ -210,6 +210,10 @@ def test_api_without_ocr_and_zip_order(tmp_path, monkeypatch):
     monkeypatch.setattr(app.state, "manager", FakeManager(), raising=False)
     monkeypatch.setattr(app.state, "settings", SimpleNamespace(data_dir=tmp_path, max_concurrency=10), raising=False)
     client = TestClient(app)
+    from backend.db.operations import bootstrap_admin
+    bootstrap_admin(store, 'admin', 'test-password-123')
+    assert client.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200
+    client.headers['X-CSRF-Token'] = client.cookies['csrf']
     response = client.post("/api/generate/multi-image", json={"source_ids": ["src_3", "src_1", "src_2"], "prompt": "统一背景"})
     assert response.status_code == 200
     assert response.json()["estimated_cost"] == 0.15

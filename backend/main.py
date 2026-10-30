@@ -14,6 +14,8 @@ from uuid import uuid4
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from starlette.background import BackgroundTask
 from openai import AsyncOpenAI
 
@@ -21,6 +23,9 @@ from backend.config import Settings
 from backend.routes.prompts import router as prompts_router
 from backend.routes.channels import router as channels_router
 from backend.routes.dashboard import router as dashboard_router
+from backend.routes.auth import router as auth_router, account, csrf_valid
+from backend.routes.admin import router as admin_router
+from backend.services.access import current_user, require_file, require_task, visible_job
 from backend.services.channels import ChannelStore, ChannelPool
 from backend.db.task_store import TaskStore, utc_now
 from backend.models.schemas import (
@@ -63,7 +68,7 @@ async def lifespan(app: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     for directory in ("source", "output", "masks", "snapshots"):
         (settings.data_dir / directory).mkdir(parents=True, exist_ok=True)
-    store = TaskStore(settings.database_path)
+    store = TaskStore(settings.database_url or settings.database_path)
     store.recover_processing()
     channels = ChannelStore(store)
     channels.seed(settings)
@@ -117,6 +122,36 @@ app = FastAPI(title="ECOM IMAGE STUDIO", version="0.1.0", lifespan=lifespan)
 app.include_router(prompts_router)
 app.include_router(channels_router)
 app.include_router(dashboard_router)
+app.include_router(auth_router)
+app.include_router(admin_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, exc: RequestValidationError):
+    return JSONResponse({'detail': '输入格式不正确，请检查填写内容'}, status_code=422)
+
+
+@app.middleware('http')
+async def migration_access(request: Request, call_next):
+    path = request.url.path
+    if path.startswith('/api/') and request.method != 'OPTIONS':
+        if path == '/api/health':
+            return JSONResponse({'status': 'ok'})
+        if path in ('/api/auth/login', '/api/auth/sms', '/api/auth/register', '/api/auth/reset-password'):
+            origin = request.headers.get('origin')
+            allowed = os.getenv('FRONTEND_ORIGINS', 'http://localhost:5173').split(',')
+            if origin and origin not in [v.strip() for v in allowed] and origin != str(request.base_url).rstrip('/'):
+                return JSONResponse({'detail': '请求来源不允许'}, status_code=403)
+        else:
+            user = account(request)
+            if user is None:
+                return JSONResponse({'detail': '请先登录'}, status_code=401)
+            request.state.user = user
+            if user['role'] != 'admin' and (path.startswith(('/api/channels', '/api/admin/', '/api/generate/', '/api/edit/')) or path == '/api/task/create' or path.endswith('/retry')):
+                return JSONResponse({'detail': '此功能尚未向普通用户开放，未扣除积分'}, status_code=403)
+            if request.method not in ('GET', 'HEAD') and not csrf_valid(request, user):
+                return JSONResponse({'detail': 'CSRF 校验失败，请刷新后重试'}, status_code=403)
+    return await call_next(request)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -161,6 +196,7 @@ async def upload(request: Request, files: list[UploadFile] = File(...)):
         current.store.register_file(
             {
                 "id": file_id,
+                "owner_id": current_user(request)["id"],
                 "original_name": upload_file.filename or "upload",
                 "path": str(path),
                 "mime_type": actual_mime,
@@ -249,9 +285,14 @@ async def advanced_edit(payload: AdvancedEditRequest, request: Request):
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest, request: Request):
     current = state(request)
+    for file_id in payload.file_ids:
+        require_file(request, file_id, purposes={"source"})
     results = []
     for file_id in payload.file_ids:
-        results.append(await asyncio.to_thread(current.analyzer.analyze, file_id))
+        result = await asyncio.to_thread(current.analyzer.analyze, file_id)
+        if current_user(request)['role'] != 'admin' and result.error:
+            result.error = '文字识别暂不可用，请稍后重试；未扣除积分'
+        results.append(result)
     return AnalyzeResponse(files=results)
 
 
@@ -415,6 +456,12 @@ async def prompt_preview(payload: PromptPreviewRequest):
 async def composite(payload: CompositeRequest, request: Request):
     current = state(request)
     paths: list[Path] = []
+    for image_id in payload.image_ids:
+        record = current.store.get_file(image_id)
+        if record is not None:
+            require_file(request, image_id, purposes={"source", "output", "composite"})
+        else:
+            visible_job(request, current.store.get_job_by_output_name(image_id))
     output_names = [image_id for image_id in payload.image_ids if "." in image_id]
     output_paths = current.store.get_done_output_paths(output_names)
     for image_id in payload.image_ids:
@@ -446,6 +493,7 @@ async def composite(payload: CompositeRequest, request: Request):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     current.store.register_file({
         "id": file_id,
+        "owner_id": current_user(request)["id"],
         "original_name": f"{file_id}.png",
         "path": str(output_path),
         "mime_type": "image/png",
@@ -460,7 +508,7 @@ async def composite(payload: CompositeRequest, request: Request):
 def task_view(request: Request, task_id: str) -> TaskView:
     current = state(request)
     try:
-        task = current.store.get_task(task_id)
+        task = require_task(request, task_id)
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc):
             raise HTTPException(status_code=503, detail="任务数据库尚未初始化，请重启后端") from exc
@@ -487,6 +535,13 @@ def task_view(request: Request, task_id: str) -> TaskView:
                 channel_name=job["channel_name"],
             )
         )
+    if current_user(request)['role'] != 'admin':
+        for view in views:
+            view.channel_name = None
+            view.input_path = ''
+            view.output_path = ''
+            if view.error:
+                view.error = '图片处理未完成；未额外扣除积分，请稍后重试'
     terminal_jobs = sum(job.status in {"done", "failed", "cancelled"} for job in views)
     sources = []
     for source_id in sorted({job.source_id for job in views}):
@@ -505,9 +560,9 @@ def task_view(request: Request, task_id: str) -> TaskView:
         failed_jobs=sum(job.status == "failed" for job in views),
         cancelled_jobs=sum(job.status == "cancelled" for job in views),
         progress=terminal_jobs / len(views) if views else 0,
-        sources=sources, jobs=views, error=task["error"],
+        sources=sources, jobs=views, error=task["error"] if current_user(request)["role"] == "admin" else ("任务未完成，请稍后重试" if task["error"] else None),
         channel_errors=list(dict.fromkeys(job.error for job in views if job.error and job.error.startswith("渠道「"))),
-        estimated_cost=round(len(jobs) * 0.05, 2), max_concurrency=sum(row["concurrency"] for row in current.channels.available()) if hasattr(current, "channels") else current.settings.max_concurrency,
+        estimated_cost=round(len(jobs) * 0.05, 2) if current_user(request)["role"] == "admin" else 0, max_concurrency=sum(row["concurrency"] for row in current.channels.available()) if hasattr(current, "channels") else current.settings.max_concurrency,
     )
 
 
@@ -522,7 +577,8 @@ async def list_tasks(request: Request, limit: int = 50, offset: int = 0):
     if limit < 1 or limit > 100 or offset < 0:
         raise HTTPException(status_code=422, detail="invalid pagination")
     items = []
-    for task in current.store.list_tasks(limit=limit, offset=offset):
+    user = current_user(request)
+    for task in current.store.list_tasks(limit=limit, offset=offset, owner_id=user["id"] if user["role"] != "admin" else None):
         view = task_view(request, task["id"])
         items.append(view.model_dump(mode="json"))
     return {"items": items, "limit": limit, "offset": offset}
@@ -531,7 +587,7 @@ async def list_tasks(request: Request, limit: int = 50, offset: int = 0):
 @app.get("/api/task/{task_id}/download")
 async def download_task(task_id: str, request: Request):
     current = state(request)
-    task = current.store.get_task(task_id)
+    task = require_task(request, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     outputs = json.loads(task["edit_rule"]).get("outputs", {})
@@ -564,6 +620,7 @@ async def download_task(task_id: str, request: Request):
 @app.post("/api/task/{task_id}/retry")
 async def retry_task(task_id: str, payload: RetryRequest, request: Request):
     current = state(request)
+    require_task(request, task_id)
     try:
         await current.manager.retry(task_id, payload.job_id)
     except ValueError as exc:
@@ -574,10 +631,10 @@ async def retry_task(task_id: str, payload: RetryRequest, request: Request):
 @app.post("/api/task/{task_id}/cancel", response_model=CancelResponse)
 async def cancel_task(task_id: str, request: Request):
     current = state(request)
-    if current.store.get_task(task_id) is None:
+    if require_task(request, task_id) is None:
         raise HTTPException(status_code=404, detail="task not found")
     requested, done = current.manager.cancel(task_id)
-    task = current.store.get_task(task_id)
+    task = require_task(request, task_id)
     return CancelResponse(
         task_id=task_id,
         status=task["status"] if task else "cancelling",
@@ -591,16 +648,19 @@ async def download_file(file_id: str, request: Request):
     current = state(request)
     record = current.store.get_file(file_id)
     if record is not None:
+        require_file(request, file_id)
         path = Path(record["path"])
         if path.exists():
             return FileResponse(path, media_type=record["mime_type"], filename=record["original_name"])
     job = current.store.get_job(file_id)
     if job is not None and job["output_path"]:
+        visible_job(request, job)
         output_path = Path(job["output_path"])
         if output_path.exists() and output_path.is_file():
             return FileResponse(output_path)
     output_job = current.store.get_job_by_output_name(file_id)
     if output_job is not None and output_job["output_path"]:
+        visible_job(request, output_job)
         output_path = Path(output_job["output_path"])
         if output_path.exists() and output_path.is_file():
             return FileResponse(output_path)

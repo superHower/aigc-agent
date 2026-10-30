@@ -12,100 +12,32 @@ def utc_now() -> str:
 
 
 class TaskStore:
-    def __init__(self, database_path: Path) -> None:
-        self.database_path = database_path
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, database_path: Path | str) -> None:
+        self.database_url = str(database_path)
+        self.postgres = self.database_url.startswith(("postgresql://", "postgres://"))
+        self.database_path = None if self.postgres else Path(database_path)
+        if self.database_path:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+    def _connect(self):
+        from backend.db.connection import connect
+        return connect(self.database_url)
 
     def initialize(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS files (
-                    id TEXT PRIMARY KEY,
-                    original_name TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    mime_type TEXT NOT NULL,
-                    width INTEGER NOT NULL,
-                    height INTEGER NOT NULL,
-                    size INTEGER NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS prompt_categories (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL UNIQUE,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS prompt_templates (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    category_id TEXT REFERENCES prompt_categories(id) ON DELETE SET NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates(category_id);
-                CREATE TABLE IF NOT EXISTS analyses (
-                    file_id TEXT PRIMARY KEY,
-                    result TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (file_id) REFERENCES files(id)
-                );
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id TEXT PRIMARY KEY,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    source_ids TEXT NOT NULL,
-                    edit_rule TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'queued',
-                    error TEXT
-                );
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    task_id TEXT NOT NULL,
-                    source_id TEXT NOT NULL,
-                    step TEXT NOT NULL,
-                    target_id TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    prompt TEXT NOT NULL DEFAULT '',
-                    mask_path TEXT,
-                    input_path TEXT NOT NULL DEFAULT '',
-                    output_path TEXT NOT NULL DEFAULT '',
-                    error TEXT,
-                    retry_count INTEGER NOT NULL DEFAULT 0,
-                    cancel_requested INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_jobs_task_id ON jobs(task_id);
-                CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
-                CREATE INDEX IF NOT EXISTS idx_jobs_cancel ON jobs(cancel_requested)
-                    WHERE cancel_requested = 1;
-                """
-            )
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
-            if "sequence" not in columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0")
-            if "channel_name" not in columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN channel_name TEXT")
-            task_columns = {row["name"] for row in connection.execute("PRAGMA table_info(tasks)")}
-            if "auto_retry_count" not in task_columns:
-                connection.execute("ALTER TABLE tasks ADD COLUMN auto_retry_count INTEGER NOT NULL DEFAULT 0")
-            connection.execute("PRAGMA journal_mode = WAL")
+        from backend.db.migrations import migrate
+        migrate(self)
+
+    def transaction(self):
+        """One caller-owned transaction; services must share its connection."""
+        return self._connect()
 
     def register_file(self, record: dict[str, Any]) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO files (id, original_name, path, mime_type, width, height, size, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO files (id, original_name, path, mime_type, width, height, size, created_at, owner_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT id FROM users WHERE role='admin' ORDER BY created_at LIMIT 1)))
                 """,
                 (
                     record["id"],
@@ -116,6 +48,7 @@ class TaskStore:
                     record["height"],
                     record["size"],
                     record["created_at"],
+                    record.get("owner_id"),
                 ),
             )
 
@@ -127,12 +60,14 @@ class TaskStore:
     def save_analysis(self, file_id: str, result: str, files: list[dict[str, Any]]) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            owner = connection.execute("SELECT owner_id FROM files WHERE id=?", (file_id,)).fetchone()
+            owner_id = owner["owner_id"] if owner else None
             for record in files:
                 connection.execute(
-                    "INSERT INTO files (id, original_name, path, mime_type, width, height, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    tuple(record[key] for key in ("id", "original_name", "path", "mime_type", "width", "height", "size", "created_at")),
+                    "INSERT INTO files (id, original_name, path, mime_type, width, height, size, created_at, owner_id, purpose) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    tuple(record[key] for key in ("id", "original_name", "path", "mime_type", "width", "height", "size", "created_at")) + (owner_id, "mask" if record["id"].startswith("mask_") else "thumbnail"),
                 )
-            connection.execute("INSERT INTO analyses (file_id, result, created_at) VALUES (?, ?, ?)", (file_id, result, utc_now()))
+            connection.execute("INSERT INTO analyses (file_id, result, created_at, owner_id) VALUES (?, ?, ?, ?)", (file_id, result, utc_now(), owner_id))
 
     def get_file(self, file_id: str) -> sqlite3.Row | None:
         with self._connect() as connection:
@@ -156,7 +91,7 @@ class TaskStore:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 connection.execute(
-                    "INSERT INTO tasks (id, created_at, updated_at, source_ids, edit_rule) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO tasks (id, created_at, updated_at, source_ids, edit_rule, owner_id) VALUES (?, ?, ?, ?, ?, (SELECT id FROM users WHERE role='admin' ORDER BY created_at LIMIT 1))",
                     (task_id, now, now, json.dumps([source_id]), json.dumps(rule)),
                 )
                 connection.execute(
@@ -179,11 +114,11 @@ class TaskStore:
         with self._connect() as connection:
             return connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
 
-    def list_tasks(self, limit: int = 50, offset: int = 0) -> list[sqlite3.Row]:
+    def list_tasks(self, limit: int = 50, offset: int = 0, owner_id: str | None = None) -> list[sqlite3.Row]:
         with self._connect() as connection:
             return connection.execute(
-                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                "SELECT * FROM tasks" + (" WHERE owner_id = ?" if owner_id else "") + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (owner_id, limit, offset) if owner_id else (limit, offset),
             ).fetchall()
 
     def get_job(self, job_id: str) -> sqlite3.Row | None:
@@ -325,7 +260,7 @@ class TaskStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
-                "INSERT INTO tasks (id, created_at, updated_at, source_ids, edit_rule) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO tasks (id, created_at, updated_at, source_ids, edit_rule, owner_id) VALUES (?, ?, ?, ?, ?, (SELECT id FROM users WHERE role='admin' ORDER BY created_at LIMIT 1))",
                 (task_id, now, now, json.dumps(source_ids), json.dumps(rule)),
             )
             for sequence, job in enumerate(jobs):

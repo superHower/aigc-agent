@@ -15,6 +15,10 @@ def test_channel_crud_and_masked_keys(tmp_path):
     app = FastAPI()
     app.include_router(router)
     app.state.channels = ChannelStore(TaskStore(tmp_path / 'tasks.db'))
+    @app.middleware('http')
+    async def admin_context(request, call_next):
+        request.state.user = {'id': 'admin', 'role': 'admin'}
+        return await call_next(request)
     client = TestClient(app)
     payload = dict(name='渠道 A', model='image-model', base_url='https://example.com/v1', api_key='secret')
     created = client.post('/api/channels', json=payload)

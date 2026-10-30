@@ -11,6 +11,12 @@ def client(tmp_path):
     app = FastAPI()
     app.include_router(router)
     app.state.store = TaskStore(tmp_path / "prompts.sqlite")
+    from backend.db.operations import bootstrap_admin
+    owner = bootstrap_admin(app.state.store, 'admin', 'test-password-123')
+    @app.middleware("http")
+    async def admin_context(request, call_next):
+        request.state.user = {'id': owner, 'role': 'admin'}
+        return await call_next(request)
     with TestClient(app) as client:
         yield client
 

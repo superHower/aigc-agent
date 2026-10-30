@@ -37,6 +37,7 @@ import { useTaskProgress } from '../hooks/useTaskProgress'
 import { AppHeader } from '../components/AppHeader'
 import { TaskResults } from '../components/TaskResults'
 import { PromptTemplatePicker } from '../components/PromptTemplatePicker'
+import { useAuth } from '../components/AuthProvider'
 
 const ratioOptions = [
   { label: '原比例', value: 'original' },
@@ -47,6 +48,8 @@ const ratioOptions = [
 const terminalStatuses = ['completed', 'partial_failed', 'failed', 'cancelled']
 
 export function Workspace() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [analysis, setAnalysis] = useState<AnalysisFile[]>([])
   const [ocrEnabled, setOcrEnabled] = useState(false)
@@ -360,11 +363,11 @@ export function Workspace() {
                 </Space>
                 <Alert
                   type="info"
-                  message={`预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}，预计费用 ¥${(expectedCount * 0.05).toFixed(2)}`}
+                  message={isAdmin ? `预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}，预计费用 ¥${(expectedCount * 0.05).toFixed(2)}` : '生图功能正在准备中，暂未开放，不扣除积分。可以上传素材和识别文字。'}
                 />
               </Space>
             </Card>
-            {ocrEnabled && mode === 'shared' && (
+            {isAdmin && ocrEnabled && mode === 'shared' && (
               <Card title="OCR 文字块编辑（可选）" className="panel-card">
                 {currentAnalysis ? (
                   <TextBlockTable
@@ -401,7 +404,7 @@ export function Workspace() {
                   type="primary"
                   icon={<PlayCircleOutlined />}
                   loading={submitting}
-                  disabled={!files.length || uploading || analyzing}
+                  disabled={!isAdmin || !files.length || uploading || analyzing}
                   onClick={() => void generate()}
                 >
                   提交批量任务

@@ -7,6 +7,9 @@ import { Prompts } from './pages/Prompts'
 import { Channels } from './pages/Channels'
 import { lazy, Suspense } from 'react'
 import { Spin } from 'antd'
+import { Login } from './pages/Login'
+import { PhoneAuth } from './pages/PhoneAuth'
+import { AuthProvider, RequireAuth } from './components/AuthProvider'
 
 const Dashboard = lazy(() =>
   import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })),
@@ -15,7 +18,12 @@ const Dashboard = lazy(() =>
 export function App() {
   return (
     <BrowserRouter>
+      <AuthProvider>
       <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<PhoneAuth />} />
+        <Route path="/forgot-password" element={<PhoneAuth reset />} />
+        <Route element={<RequireAuth />}>
         <Route
           path="/"
           element={
@@ -29,9 +37,11 @@ export function App() {
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/composite" element={<Composite />} />
         <Route path="/prompts" element={<Prompts />} />
-        <Route path="/channels" element={<Channels />} />
+        <Route element={<RequireAuth admin />}><Route path="/channels" element={<Channels />} /></Route>
         <Route path="*" element={<Workspace />} />
+        </Route>
       </Routes>
+      </AuthProvider>
     </BrowserRouter>
   )
 }
