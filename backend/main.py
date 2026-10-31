@@ -29,6 +29,7 @@ from backend.routes.accounts import router as accounts_router
 from backend.routes.packages import router as packages_router
 from backend.routes.orders import router as orders_router
 from backend.routes.operations import router as operations_router
+from backend.routes.alipay import router as alipay_router
 from backend.services import credits
 from backend.services.access import current_user, require_file, require_task, visible_job
 from backend.services.channels import ChannelStore, ChannelPool
@@ -136,6 +137,7 @@ app.include_router(accounts_router)
 app.include_router(packages_router)
 app.include_router(orders_router)
 app.include_router(operations_router)
+app.include_router(alipay_router)
 
 
 @app.exception_handler(RequestValidationError)

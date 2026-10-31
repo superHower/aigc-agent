@@ -25,20 +25,6 @@ services:
     ports:
       - "8080:80"
 
-  natapp:
-    build:
-      context: ./docker/natapp
-    platform: linux/amd64
-    depends_on:
-      - frontend
-    network_mode: "service:frontend"
-    environment:
-      NATAPP_AUTHTOKEN: ${NATAPP_AUTHTOKEN:-}
-    volumes:
-      - natapp-client:/opt/natapp
-    restart: unless-stopped
-
 volumes:
   backend-media:
   backend-data:
-  natapp-client:
