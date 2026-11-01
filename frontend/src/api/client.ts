@@ -1,6 +1,13 @@
 import axios from 'axios'
 
 export const api = axios.create({ baseURL: '/api', timeout: 120_000 })
+export function idempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const random = Math.random() * 16 | 0
+    return (char === 'x' ? random : (random & 0x3 | 0x8)).toString(16)
+  })
+}
 api.interceptors.request.use((config) => {
   if (!['get', 'head', 'options'].includes(config.method ?? 'get')) {
     const csrf = document.cookie.split('; ').find((item) => item.startsWith('csrf='))?.slice(5)
@@ -37,6 +44,8 @@ export async function listChannels() { return (await api.get<{ items: Channel[] 
 export async function saveChannel(payload: ChannelInput, id?: string) { return (await (id ? api.put(`/channels/${id}`, payload) : api.post('/channels', payload))).data }
 export async function deleteChannel(id: string) { await api.delete(`/channels/${id}`) }
 export async function resetChannel(id: string) { await api.post(`/channels/${id}/reset`) }
+export async function previewStorageCleanup(before: string) { return (await api.get('/admin/storage/cleanup-preview', { params: { before } })).data }
+export async function cleanupStorage(before: string) { return (await api.post('/admin/storage/cleanup', { before, confirm: true })).data }
 
 export type PromptCategory = { id: string; name: string; created_at: string; visibility?: 'private' | 'public'; owner_id?: string }
 export type PromptTemplate = { id: string; name: string; content: string; category_id: string | null; created_at: string; updated_at: string; visibility?: 'private' | 'public'; owner_id?: string }
@@ -49,6 +58,11 @@ export async function savePromptTemplate(payload: PromptTemplateInput, id?: stri
 export async function deletePromptTemplate(id: string) { await api.delete(`/prompt-templates/${id}`) }
 export function promptError(reason: unknown) {
   if (axios.isAxiosError(reason) && typeof reason.response?.data?.detail === 'string') return reason.response.data.detail
+  if (axios.isAxiosError(reason) && reason.response?.data?.detail) {
+    const detail = reason.response.data.detail
+    return typeof detail === 'object' ? JSON.stringify(detail) : String(detail)
+  }
+  if (axios.isAxiosError(reason) && reason.response?.status) return `请求失败（HTTP ${reason.response.status}）`
   return '操作失败，请稍后重试'
 }
 
@@ -69,7 +83,7 @@ export async function cancelTask(taskId: string) { return (await api.post(`/task
 const retryKeys = new Map<string, string>()
 export async function retryTask(taskId: string, jobId?: string) {
   const reference = `${taskId}:${jobId ?? ''}`
-  const key = retryKeys.get(reference) ?? crypto.randomUUID()
+  const key = retryKeys.get(reference) ?? idempotencyKey()
   retryKeys.set(reference, key)
   try {
     const result = (await api.post(`/task/${taskId}/retry`, jobId ? { job_id: jobId } : {}, { headers: { 'Idempotency-Key': key } })).data

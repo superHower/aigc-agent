@@ -1,7 +1,7 @@
 ﻿import { useEffect, useState } from 'react'
-import { Alert, Button, Card, DatePicker, Input, Segmented, Space, Statistic, Table, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Input, Modal, Segmented, Space, Statistic, Table, Typography, message } from 'antd'
 import dayjs from 'dayjs'
-import { api, promptError } from '../api/client'
+import { api, cleanupStorage, previewStorageCleanup, promptError } from '../api/client'
 import { AppHeader } from '../components/AppHeader'
 import { Chart } from '../components/Chart'
 
@@ -13,6 +13,17 @@ export function Operations() {
   const [readiness, setReadiness] = useState<Record<string, string | number | boolean>>()
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
+  const [cleanupDate, setCleanupDate] = useState(dayjs().subtract(30, 'day'))
+  const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [cleanupInfo, setCleanupInfo] = useState<{ count: number; bytes: number; protected: number; sample: string[] }>()
+  const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)} MB`
+  const previewCleanup = async () => {
+    try { setCleanupInfo(await previewStorageCleanup(cleanupDate.format('YYYY-MM-DD'))) } catch (e) { message.error(promptError(e)) }
+  }
+  const executeCleanup = async () => {
+    if (!cleanupInfo?.count) return message.info('没有符合条件的图片')
+    Modal.confirm({ title: '确认清理服务器图片？', content: `将删除 ${cleanupInfo.count} 个文件，共 ${formatBytes(cleanupInfo.bytes)}。任务记录会保留，但删除后图片无法下载。`, okText: '确认删除', okType: 'danger', cancelText: '取消', onOk: async () => { setCleanupBusy(true); try { const result = await cleanupStorage(cleanupDate.format('YYYY-MM-DD')); message.success(`已删除 ${result.deleted} 个文件`); setCleanupInfo(undefined) } catch (e) { message.error(promptError(e)) } finally { setCleanupBusy(false) } } })
+  }
   useEffect(() => {
     Promise.all([api.get('/admin/dashboard', { params: { period, selected_date: selected.format('YYYY-MM-DD'), timezone_offset: selected.toDate().getTimezoneOffset() } }), api.get('/admin/readiness')]).then(([d, r]) => { setData(d.data); setReadiness(r.data); setError('') }).catch(e => setError(promptError(e)))
   }, [period, selected, revision])
@@ -28,6 +39,7 @@ export function Operations() {
     <Card title="套餐销量（已核实）"><Table rowKey={r => r.package_id + r.name} dataSource={data?.sales} pagination={false} columns={[{ title: '订单套餐名称快照', dataIndex: 'name' }, { title: '订单数', dataIndex: 'orders' }, { title: '核实金额（元）', dataIndex: 'verified_cents', render: (v: number) => (v / 100).toFixed(2) }]} /></Card>
     <Card title="调用与成本"><Space wrap size="large">{[['执行记录', s?.attempts], ['已调用 SDK', s?.dispatched], ['发出状态未知', s?.dispatch_unknown], ['失败记录', s?.failed_attempts], ['重试调用', s?.retry_attempts], ['实际成本未知', s?.unknown_cost_attempts], ['缺少估算单价', s?.unpriced_attempts], ['配置单价估算（元）', (s?.estimated_cost_cents ?? 0) / 100]].map(([title, value]) => <Statistic key={String(title)} title={title} value={value ?? 0} />)}</Space><Alert type="info" message="估算只汇总有单价且调用 SDK 的记录，包含重试。没有可信上游账单来源时，实际成本为未知；调用 SDK 也不代表上游已接收。历史记录的发出状态可能未知。" /></Card>
     <Card title="发布配置状态"><Typography.Paragraph>数据库：{readiness?.database}；验证码：{readiness?.verification_mode}；Secure Cookie：{readiness?.secure_cookie ? '开启' : '关闭'}；上架套餐：{readiness?.active_packages}；有效收款码：{readiness?.payment_code_active ? '已启用' : '未配置'}；执行器：单进程。</Typography.Paragraph><Alert type="warning" message={String(readiness?.external_acceptance ?? '加载中')} /></Card>
+    <Card title="存储图片清理"><Typography.Paragraph type="secondary">按文件最后修改时间清理指定日期以前的上传图、生成图、遮罩和快照。正在执行的任务文件会自动保护；数据库任务记录不会删除。</Typography.Paragraph><Space wrap><DatePicker value={cleanupDate} onChange={d => d && setCleanupDate(d)} /><Button onClick={() => void previewCleanup()}>预览清理范围</Button><Button danger disabled={!cleanupInfo?.count} loading={cleanupBusy} onClick={() => void executeCleanup()}>确认删除</Button></Space>{cleanupInfo && <Alert style={{ marginTop: 16 }} type={cleanupInfo.count ? 'warning' : 'info'} message={`符合条件 ${cleanupInfo.count} 个文件，共 ${formatBytes(cleanupInfo.bytes)}；保护中 ${cleanupInfo.protected} 个文件`} description={cleanupInfo.sample.length ? `示例：${cleanupInfo.sample.join('、')}` : '没有符合条件的图片。'} />}</Card>
   </Space></main></div>
 }
 

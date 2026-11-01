@@ -1,14 +1,98 @@
-from datetime import date
+from datetime import date, datetime, time, timezone
+import json
+from uuid import uuid4
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from backend.services.access import current_user, require_admin
+from backend.db.task_store import utc_now
 from backend.services.operations_dashboard import metrics
 from backend.services.dashboard import dashboard_stats
 from backend.services import membership
 
 router = APIRouter(tags=['operations'])
+
+IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff'}
+
+
+class StorageCleanupRequest(BaseModel):
+    before: date
+    confirm: bool = False
+
+
+def _storage_cleanup_scan(request: Request, cutoff: date) -> dict:
+    root = request.app.state.settings.data_dir.resolve()
+    boundary = datetime.combine(cutoff, time.min, tzinfo=timezone.utc).timestamp()
+    protected: set[Path] = set()
+    with request.app.state.store.transaction() as db:
+        for row in db.execute("SELECT input_path,output_path,mask_path FROM jobs WHERE status IN ('pending','processing','cancelling')"):
+            for key in ('input_path', 'output_path', 'mask_path'):
+                if row[key]:
+                    try:
+                        protected.add(Path(row[key]).resolve())
+                    except OSError:
+                        pass
+    candidates: list[Path] = []
+    protected_count = 0
+    for path in root.rglob('*'):
+        if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        resolved = path.resolve()
+        if root not in resolved.parents:
+            continue
+        if resolved in protected:
+            protected_count += 1
+            continue
+        try:
+            if path.stat().st_mtime < boundary:
+                candidates.append(path)
+        except OSError:
+            continue
+    size = 0
+    for path in candidates:
+        try:
+            size += path.stat().st_size
+        except OSError:
+            pass
+    return {'before': cutoff.isoformat(), 'count': len(candidates), 'bytes': size, 'protected': protected_count,
+            'sample': [str(path.relative_to(root)) for path in candidates[:20]], 'paths': candidates}
+
+
+@router.get('/api/admin/storage/cleanup-preview')
+def storage_cleanup_preview(request: Request, before: date = Query(...)):
+    require_admin(request)
+    result = _storage_cleanup_scan(request, before)
+    result.pop('paths', None)
+    return result
+
+
+@router.post('/api/admin/storage/cleanup')
+def storage_cleanup(payload: StorageCleanupRequest, request: Request):
+    actor = require_admin(request)
+    if not payload.confirm:
+        raise HTTPException(422, '请先预览并确认清理范围')
+    result = _storage_cleanup_scan(request, payload.before)
+    deleted, bytes_deleted = 0, 0
+    for path in result['paths']:
+        try:
+            size = path.stat().st_size
+            path.unlink()
+            deleted += 1
+            bytes_deleted += size
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+    with request.app.state.store.transaction() as db:
+        db.execute('INSERT INTO audit_logs VALUES (?,?,?,?,?,?,?)',
+                   (uuid4().hex, actor['id'], 'storage_cleanup', 'media',
+                    f'清理 {payload.before.isoformat()} 以前的图片',
+                    json.dumps({'before': payload.before.isoformat(), 'deleted': deleted, 'bytes': bytes_deleted}, ensure_ascii=False),
+                    utc_now()))
+    return {'before': payload.before.isoformat(), 'deleted': deleted, 'bytes': bytes_deleted, 'protected': result['protected']}
 
 
 @router.get('/api/admin/dashboard')

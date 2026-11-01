@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Alert, Button, Image, Input, Modal, Typography, message } from 'antd'
-import { api, promptError, type TaskJob } from '../api/client'
+import { api, idempotencyKey, promptError, type TaskJob } from '../api/client'
 import { useAuth } from './AuthProvider'
 
 export function RefineImageButton({ job, disabled, onSubmitted }: { job: TaskJob; disabled?: boolean; onSubmitted?: () => void }) {
@@ -14,7 +14,7 @@ export function RefineImageButton({ job, disabled, onSubmitted }: { job: TaskJob
     <Modal title="进一步优化这张图片" open={open} confirmLoading={busy} okText="开始优化" cancelText="取消" okButtonProps={{ disabled: !prompt.trim() }} onCancel={() => { if (!busy) setOpen(false) }} onOk={async () => {
       if (busy || !prompt.trim()) return
       setBusy(true); setError('')
-      if (submission.current?.prompt !== prompt.trim()) submission.current = { prompt: prompt.trim(), key: crypto.randomUUID() }
+      if (submission.current?.prompt !== prompt.trim()) submission.current = { prompt: prompt.trim(), key: idempotencyKey() }
       try {
         await api.post(`/task/${job.task_id}/jobs/${job.id}/refine`, { prompt: prompt.trim() }, { headers: { 'Idempotency-Key': submission.current.key } })
         submission.current = undefined; setOpen(false); setPrompt(''); onSubmitted?.(); message.success('已在当前任务中提交优化，原结果保留')

@@ -30,6 +30,7 @@ import {
   uploadFiles,
   api,
   promptError,
+  idempotencyKey,
   type AnalysisFile,
   type UploadedFile,
 } from '../api/client'
@@ -55,11 +56,15 @@ export function Workspace() {
   const [available, setAvailable] = useState<number | null>(null)
   const submission = useRef<{ payload: string; key: string } | null>(null)
   useEffect(() => {
+    if (isAdmin) {
+      setAvailable(0)
+      return
+    }
     const refresh = () => api.get('/account/credits').then(r => setAvailable(r.data.available)).catch(() => setAvailable(null))
     void refresh()
     const timer = window.setInterval(() => void refresh(), 10000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [isAdmin])
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [analysis, setAnalysis] = useState<AnalysisFile[]>([])
   const [ocrEnabled, setOcrEnabled] = useState(false)
@@ -216,7 +221,7 @@ export function Workspace() {
       setAvailable(preview.available)
       if (preview.required_credits > preview.available) { message.error('可用积分不足，请充值后重试；未扣除积分'); return }
       const serialized = JSON.stringify(payload)
-      if (submission.current?.payload !== serialized) submission.current = { payload: serialized, key: crypto.randomUUID() }
+      if (submission.current?.payload !== serialized) submission.current = { payload: serialized, key: idempotencyKey() }
       const result = await generateMultiImage(payload, submission.current!.key)
       submission.current = null
       setTaskId(result.task_id)

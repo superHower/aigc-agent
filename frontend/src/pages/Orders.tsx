@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Alert, Button, Card, Form, Input, InputNumber, Select, Space, Table, Tag, Typography } from 'antd'
-import { api, promptError } from '../api/client'
+import { api, idempotencyKey, promptError } from '../api/client'
 import { AppHeader } from '../components/AppHeader'
 import { useAuth } from '../components/AuthProvider'
 
@@ -14,7 +14,7 @@ export function financialKey(scope: string, payload: unknown) {
   const fingerprint = JSON.stringify(payload)
   const stored = sessionStorage.getItem(scope)
   if (stored) { const old = JSON.parse(stored); if (old.payload === fingerprint) return old.key as string }
-  const key = crypto.randomUUID(); sessionStorage.setItem(scope, JSON.stringify({ payload: fingerprint, key })); return key
+  const key = idempotencyKey(); sessionStorage.setItem(scope, JSON.stringify({ payload: fingerprint, key })); return key
 }
 
 export function Orders({ admin = false }: { admin?: boolean }) {

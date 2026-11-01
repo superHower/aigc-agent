@@ -338,9 +338,13 @@ async def generate_batch(payload: BatchRequest, request: Request):
     for source_id in payload.source_ids:
         source = sources[source_id]
         analysis_json = current.store.get_analysis(source_id)
-        if not analysis_json:
-            raise HTTPException(status_code=409, detail=f"analyze source before generation: {source_id}")
-        analysis = AnalyzeResponse.model_validate_json('{"files":[' + analysis_json + ']}').files[0]
+        if analysis_json:
+            analysis = AnalyzeResponse.model_validate_json('{"files":[' + analysis_json + ']}').files[0]
+        elif payload.edit_rule.text_replace_enabled or payload.edit_rule.logo_replace_enabled:
+            raise HTTPException(status_code=409, detail=f"analyze source before text or logo editing: {source_id}")
+        else:
+            # OCR is optional. Plain image generation only needs the uploaded source.
+            analysis = AnalyzeResponse.model_validate('{"files":[{"file_id":"' + source_id + '","width":0,"height":0}]}').files[0]
         overrides = payload.per_source_overrides.get(source_id, {})
         replacements = {item.id: item for item in overrides.text_blocks}
         source_job_list: list[dict[str, str]] = []
