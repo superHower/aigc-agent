@@ -78,7 +78,7 @@ export function Workspace() {
   const [ratios, setRatios] = useState<string[]>(['original'])
   const [targets, setTargets] = useState<string[]>([])
   const [referenceId, setReferenceId] = useState<string>()
-  const [component, setComponent] = useState('背景')
+  const [referencePrompt, setReferencePrompt] = useState('')
   const [quality, setQuality] = useState('high')
   const [rightsConfirmed, setRightsConfirmed] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -189,8 +189,8 @@ export function Workspace() {
       message.warning('请填写通用提示词')
       return
     }
-    if (mode === 'reference' && (!referenceId || !component.trim())) {
-      message.warning('请选择参考图并填写替换内容')
+    if (mode === 'reference' && (!referenceId || !referencePrompt.trim())) {
+      message.warning('请选择参考图并填写编辑要求')
       return
     }
     const overrides = Object.fromEntries(
@@ -209,10 +209,9 @@ export function Workspace() {
       const payload = {
         source_ids: sourceIds,
         mode,
-        prompt,
+        prompt: mode === 'reference' ? referencePrompt : prompt,
         aspect_ratios: ratios,
         reference_file_id: referenceId,
-        reference_component: component,
         ocr_enabled: isAdmin && ocrEnabled && mode === 'shared',
         per_source_overrides: overrides,
         quality,
@@ -343,7 +342,7 @@ export function Workspace() {
                     options={fileOptions}
                   />
                   <Typography.Text>
-                    请把以下待处理图片的指定内容换成参考图的，其他内容不变。
+                    每张待处理图片都会分别结合参考图执行编辑要求。
                   </Typography.Text>
                   <Checkbox disabled={!referenceId || !fileOptions.some(option => option.value !== referenceId)} checked={!!referenceId && targets.length === fileOptions.filter(option => option.value !== referenceId).length && targets.length > 0} indeterminate={targets.length > 0 && targets.length < fileOptions.filter(option => option.value !== referenceId).length} onChange={event => setTargets(event.target.checked ? fileOptions.filter(option => option.value !== referenceId).map(option => option.value) : [])}>全选待处理图片（不含参考图）</Checkbox>
                   <Select
@@ -354,12 +353,20 @@ export function Workspace() {
                     placeholder="选择待处理图片，例如图二、图三、图四"
                     options={fileOptions.filter((option) => option.value !== referenceId)}
                   />
-                  <PromptTemplatePicker value={component} onChange={setComponent} />
+                  <Typography.Title level={5} id="reference-prompt-label">编辑要求</Typography.Title>
+                  <Typography.Text type="secondary" id="reference-prompt-help">
+                    可以描述替换内容、参考方式、保留内容及其他限制。未提及的部分默认尽量保留。
+                  </Typography.Text>
+                  <PromptTemplatePicker value={referencePrompt} onChange={setReferencePrompt} />
                   <Input.TextArea
+                    aria-labelledby="reference-prompt-label"
+                    aria-describedby="reference-prompt-help"
                     autoSize={{ minRows: 4, maxRows: 10 }}
-                    value={component}
-                    onChange={(event) => setComponent(event.target.value)}
-                    placeholder="要替换的内容，例如背景"
+                    value={referencePrompt}
+                    onChange={(event) => setReferencePrompt(event.target.value)}
+                    maxLength={32000}
+                    showCount
+                    placeholder="将待处理图片的背景换成参考图中的场景，参考其色调和光照。保持原产品的外形、颜色、文字和位置不变，调整阴影使产品自然融入背景，不要增加其他物品。"
                   />
 
                 </Space>

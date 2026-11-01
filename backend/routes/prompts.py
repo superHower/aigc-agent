@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import sqlite3
+from io import BytesIO
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
+from pydantic import BaseModel, Field, ValidationError, field_validator
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font
 
 from backend.db.task_store import utc_now
 from backend.services.access import current_user
 from backend.services.audit import log
 
 router = APIRouter(prefix="/api", tags=["prompt library"])
+EXCEL_HEADERS = ("模板名称", "分类", "提示词内容")
 
 
 class CategoryInput(BaseModel):
@@ -186,3 +190,86 @@ def delete_template(item_id: str, request: Request):
         db.execute("DELETE FROM prompt_templates WHERE id = ?", (item_id,))
         log(db, current_user(request)['id'], 'template_delete', item_id)
     return Response(status_code=204)
+
+
+@router.get("/prompt-library/export")
+def export_templates(request: Request, q: str = Query(default="", max_length=200), category_id: str | None = None, uncategorized: bool = False):
+    templates = list_templates(request, q, category_id, uncategorized)["items"]
+    categories = {item["id"]: item["name"] for item in list_categories(request)["items"]}
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "提示词模板"
+    sheet.append(EXCEL_HEADERS)
+    for item in templates:
+        sheet.append([item["name"], categories.get(item["category_id"], ""), item["content"]])
+        for cell in sheet[sheet.max_row]:
+            cell.data_type = "s"
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for column, width in (("A", 28), ("B", 22), ("C", 100)):
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    output = BytesIO()
+    book.save(output)
+    book.close()
+    return Response(output.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="prompt-templates.xlsx"'})
+
+
+@router.post("/prompt-library/import")
+def import_templates(request: Request, file: UploadFile = File(...)):
+    user = current_user(request)
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(422, "请选择 .xlsx 格式的 Excel 文件")
+    content = file.file.read(5 * 1024 * 1024 + 1)
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(422, "Excel 文件不能超过 5 MB")
+    try:
+        book = load_workbook(BytesIO(content), read_only=True, data_only=False)
+    except Exception as exc:
+        raise HTTPException(422, "无法读取 Excel，请确认文件是有效的 .xlsx 文件") from exc
+    entries = []
+    try:
+        sheet = book.active
+        rows = sheet.iter_rows(max_row=1002, max_col=3)
+        header = next(rows, ())
+        if tuple(cell.value for cell in header) != EXCEL_HEADERS:
+            raise HTTPException(422, "首行须依次为：模板名称、分类、提示词内容。可先导出 Excel 作为导入模板")
+        for row_number, cells in enumerate(rows, 2):
+            values = [cell.value for cell in cells]
+            if all(value is None or value == "" for value in values):
+                continue
+            if row_number > 1001 or (sheet.max_row or 0) > 1001:
+                raise HTTPException(422, "每次最多导入 1000 行，请拆分文件")
+            if any(cell.data_type == "f" for cell in cells):
+                raise HTTPException(422, f"第 {row_number} 行含公式，请改为纯文本")
+            name, category, prompt = [str(value) if value is not None else "" for value in values]
+            try:
+                payload = TemplateInput(name=name, content=prompt)
+                category = CategoryInput(name=category).name if category.strip() else ""
+            except ValidationError as exc:
+                raise HTTPException(422, f"第 {row_number} 行：{exc.errors()[0]['msg']}") from exc
+            entries.append((payload, category))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, "无法读取 Excel 内容，请重新保存为 .xlsx 后重试") from exc
+    finally:
+        book.close()
+    if not entries:
+        raise HTTPException(422, "Excel 中没有可导入的模板")
+    created_categories = 0
+    with connection(request) as db:
+        existing = db.execute("SELECT id, display_name FROM prompt_categories WHERE owner_id=?", (user["id"],)).fetchall()
+        categories = {row["display_name"]: row["id"] for row in existing}
+        for payload, category in entries:
+            if category and category not in categories:
+                ident = uuid4().hex
+                db.execute("INSERT INTO prompt_categories (id,name,created_at,owner_id,display_name,visibility) VALUES (?,?,?,?,?,'private')", (ident, ident, utc_now(), user["id"], category))
+                categories[category] = ident
+                created_categories += 1
+                log(db, user["id"], "category_create", ident, {"name": category, "visibility": "private"})
+            payload.category_id = categories.get(category)
+            save_template(db, payload, uuid4().hex, create=True, user=user)
+    return {"imported": len(entries), "created_categories": created_categories}

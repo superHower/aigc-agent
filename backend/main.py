@@ -564,7 +564,16 @@ def task_view(request: Request, task_id: str) -> TaskView:
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     jobs = current.store.get_jobs(task_id)
+    source_files = current.store.get_files(list({job["source_id"] for job in jobs}))
     rule = json.loads(task["edit_rule"])
+    reference_paths = rule.get("reference_paths", [])
+    reference_urls = []
+    if reference_paths:
+        with current.store.transaction() as db:
+            placeholders = ",".join("?" for _ in reference_paths)
+            references = db.execute(f"SELECT id, path FROM files WHERE path IN ({placeholders})", reference_paths).fetchall()
+        references_by_path = {row["path"]: row["id"] for row in references}
+        reference_urls = [f"/api/files/{references_by_path[path]}" for path in reference_paths if path in references_by_path]
     from backend.services.attempts import task_durations
     durations = task_durations(current.store, task_id)
     views = []
@@ -576,6 +585,9 @@ def task_view(request: Request, task_id: str) -> TaskView:
         )
         views.append(
             JobView(
+                source_filename=source_files[job["source_id"]]["original_name"] if job["source_id"] in source_files else None,
+                prompt=job["prompt"],
+                reference_urls=[] if rule.get("outputs", {}).get(job["id"], {}).get("refinement") else reference_urls,
                 duration_seconds=durations.get(job['id']),
                 id=job["id"], task_id=job["task_id"], source_id=job["source_id"],
                 step=job["step"], target_id=job["target_id"], status=job["status"], retry_count=job["retry_count"],

@@ -30,7 +30,7 @@ export function Chart({
 
   useEffect(() => {
     if (!element.current) return
-    const chart = echarts.init(element.current)
+    const chart = echarts.init(element.current, 'dark')
     instance.current = chart
     const resize = new ResizeObserver(() => chart.resize())
     resize.observe(element.current)
@@ -43,7 +43,7 @@ export function Chart({
 
   useEffect(() => {
     instance.current?.setOption(
-      { ...option, aria: { enabled: true, label: { description: label } }, textStyle: { fontFamily: 'inherit' } },
+      { backgroundColor: 'transparent', ...option, aria: { enabled: true, label: { description: label } }, textStyle: { fontFamily: 'inherit' } },
       true,
     )
   }, [option, label])

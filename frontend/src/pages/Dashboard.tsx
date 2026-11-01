@@ -52,7 +52,7 @@ const statusColors: Record<string, string> = {
   cancelling: 'warning',
   cancelled: 'default',
 }
-const palette = { done: '#20b68b', failed: '#f07878', active: '#6799f5', purple: '#8b7cf8' }
+const palette = { done: '#02dba3', failed: '#ff7078', active: '#ccff00', purple: '#e392f0' }
 
 function Comparison({
   value,
@@ -136,15 +136,15 @@ export function Dashboard() {
         type: 'category',
         data: data?.trend.map((item) => item.label),
         axisTick: { show: false },
-        axisLine: { lineStyle: { color: '#e6eaf1' } },
-        axisLabel: { color: '#7b8599' },
+        axisLine: { lineStyle: { color: '#333333' } },
+        axisLabel: { color: '#a3a3a3' },
       },
       yAxis: [
         {
           type: 'value',
           name: '图片 / 张',
           minInterval: 1,
-          splitLine: { lineStyle: { color: '#f0f2f6', type: 'dashed' } },
+          splitLine: { lineStyle: { color: '#262626', type: 'dashed' } },
         },
         { type: 'value', name: '任务 / 个', minInterval: 1, splitLine: { show: false } },
       ],
@@ -172,7 +172,7 @@ export function Dashboard() {
 
   const distributionOption = useMemo(
     () => ({
-      color: [palette.done, palette.failed, palette.active, '#d7deea'],
+      color: [palette.done, palette.failed, palette.active, '#555555'],
       tooltip: { trigger: 'item', formatter: '{b}：{c} 张（{d}%）' },
       legend: { bottom: 0, itemWidth: 10, itemHeight: 10 },
       series: [
@@ -184,7 +184,7 @@ export function Dashboard() {
           emphasis: {
             label: { show: true, formatter: '{b}\n{d}%', fontSize: 15, fontWeight: 'bold' },
           },
-          itemStyle: { borderColor: '#fff', borderWidth: 4, borderRadius: 7 },
+          itemStyle: { borderColor: '#080808', borderWidth: 4, borderRadius: 7 },
           data: [
             { name: '成功', value: data?.summary.done ?? 0 },
             { name: '失败', value: data?.summary.failed ?? 0 },
@@ -200,14 +200,14 @@ export function Dashboard() {
   const channelOption = useMemo(() => {
     const channels = [...(data?.channels ?? [])].slice(0, 8).reverse()
     return {
-      color: [palette.done, palette.failed, '#d7deea'],
+      color: [palette.done, palette.failed, '#555555'],
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
       legend: { bottom: 0, itemWidth: 10, itemHeight: 8 },
       grid: { left: 110, right: 25, top: 10, bottom: 45 },
       xAxis: {
         type: 'value',
         minInterval: 1,
-        splitLine: { lineStyle: { color: '#f0f2f6', type: 'dashed' } },
+        splitLine: { lineStyle: { color: '#262626', type: 'dashed' } },
       },
       yAxis: {
         type: 'category',

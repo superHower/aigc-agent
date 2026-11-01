@@ -1,4 +1,7 @@
+import io
+
 import pytest
+from openpyxl import Workbook, load_workbook
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -15,7 +18,7 @@ def client(tmp_path):
     owner = bootstrap_admin(app.state.store, 'admin', 'test-password-123')
     @app.middleware("http")
     async def admin_context(request, call_next):
-        request.state.user = {'id': owner, 'role': 'admin'}
+        request.state.user = getattr(app.state, 'test_user', {'id': owner, 'role': 'admin'})
         return await call_next(request)
     with TestClient(app) as client:
         yield client
@@ -56,3 +59,80 @@ def test_library_rejects_invalid_data(client):
     assert client.post("/api/prompt-templates", json={"name": "模板", "content": "内容", "category_id": "missing"}).status_code == 404
     assert client.put("/api/prompt-templates/missing", json={"name": "模板", "content": "内容"}).status_code == 404
     assert client.delete("/api/prompt-categories/missing").status_code == 404
+
+
+def excel_file(rows):
+    book = Workbook()
+    for row in rows:
+        book.active.append(row)
+    output = io.BytesIO()
+    book.save(output)
+    book.close()
+    return output.getvalue()
+
+
+def test_excel_export_and_import_roundtrip(client):
+    category = client.post('/api/prompt-categories', json={'name': '背景', 'visibility': 'public'}).json()
+    content = '=保留产品\n调整背景和阴影'
+    client.post('/api/prompt-templates', json={'name': '=摄影棚', 'content': content, 'category_id': category['id']})
+    client.post('/api/prompt-templates', json={'name': '其他', 'content': '忽略'})
+    response = client.get('/api/prompt-library/export', params={'category_id': category['id'], 'q': '摄影棚'})
+    assert response.status_code == 200
+    book = load_workbook(io.BytesIO(response.content))
+    assert list(book.active.values) == [('模板名称', '分类', '提示词内容'), ('=摄影棚', '背景', content)]
+    assert book.active['A2'].data_type == 's'
+    assert book.active['C2'].data_type == 's'
+    book.close()
+    imported = client.post('/api/prompt-library/import', files={'file': ('templates.xlsx', response.content)})
+    assert imported.status_code == 200
+    assert imported.json() == {'imported': 1, 'created_categories': 0}
+    templates = client.get('/api/prompt-templates').json()['items']
+    assert len(templates) == 3
+    assert len([item for item in templates if item['content'] == content and item['visibility'] == 'private']) == 2
+
+
+def test_excel_import_validates_entire_file_before_saving(client):
+    headers = ['模板名称', '分类', '提示词内容']
+    bad = excel_file([headers, ['有效', '新分类', '内容'], ['无效', '', '   ']])
+    response = client.post('/api/prompt-library/import', files={'file': ('test.xlsx', bad)})
+    assert response.status_code == 422
+    assert '第 3 行' in response.json()['detail']
+    assert client.get('/api/prompt-templates').json()['items'] == []
+    assert client.get('/api/prompt-categories').json()['items'] == []
+    good = excel_file([headers, ['一', '新分类', '内容\n第二行'], ['二', '新分类', '内容二'], ['三', '', '无分类']])
+    response = client.post('/api/prompt-library/import', files={'file': ('test.xlsx', good)})
+    assert response.json() == {'imported': 3, 'created_categories': 1}
+    assert len(client.get('/api/prompt-categories').json()['items']) == 1
+    formula = excel_file([headers, ['公式', '', '=1+1']])
+    assert client.post('/api/prompt-library/import', files={'file': ('test.xlsx', formula)}).status_code == 422
+    assert client.post('/api/prompt-library/import', files={'file': ('bad.xlsx', b'bad')}).status_code == 422
+    assert client.post('/api/prompt-library/import', files={'file': ('bad.xls', good)}).status_code == 422
+    assert client.post('/api/prompt-library/import', files={'file': ('empty.xlsx', excel_file([headers]))}).status_code == 422
+
+
+def test_excel_respects_user_scope(client):
+    from backend.db.task_store import utc_now
+    category = client.post('/api/prompt-categories', json={'name': '公共分类', 'visibility': 'public'}).json()
+    client.post('/api/prompt-templates', json={'name': '公共', 'content': '公开内容', 'visibility': 'public', 'category_id': category['id']})
+    client.post('/api/prompt-templates', json={'name': '管理员私有', 'content': '不应导出'})
+    owner = 'test_excel_user'
+    with client.app.state.store.transaction() as db:
+        db.execute('INSERT INTO users (id,username,password_hash,role,created_at) VALUES (?,?,?,?,?)', (owner, owner, 'unused', 'user', utc_now()))
+    client.app.state.test_user = {'id': owner, 'role': 'user'}
+    response = client.get('/api/prompt-library/export')
+    book = load_workbook(io.BytesIO(response.content))
+    assert list(book.active.values) == [('模板名称', '分类', '提示词内容'), ('公共', '公共分类', '公开内容')]
+    book.close()
+    assert client.post('/api/prompt-library/import', files={'file': ('test.xlsx', response.content)}).json() == {'imported': 1, 'created_categories': 1}
+    items = client.get('/api/prompt-templates').json()['items']
+    imported = next(item for item in items if item['owner_id'] == owner)
+    assert imported['visibility'] == 'private'
+    assert imported['category_id'] != category['id']
+
+
+def test_excel_row_limit(client):
+    headers = ['模板名称', '分类', '提示词内容']
+    response = client.post('/api/prompt-library/import', files={'file': ('test.xlsx', excel_file([headers] + [['名称', '', '内容']] * 1001))})
+    assert response.status_code == 422
+    assert '1000' in response.json()['detail']
+    assert client.get('/api/prompt-templates').json()['items'] == []

@@ -17,8 +17,8 @@ export function PhoneAuth({ reset = false }: { reset?: boolean }) {
     finally { setRefreshing(false) }
   }
   useEffect(() => { if (!reset) void refreshCaptcha() }, [reset])
-  if (reset) return <main style={{ maxWidth: 440, margin: '8vh auto', padding: 24 }}><Card title="找回密码"><Typography.Paragraph>请联系管理员核实身份后重置密码。重置后原登录会话将失效。</Typography.Paragraph><Link to="/login">返回登录</Link></Card></main>
-  return <main style={{ maxWidth: 440, margin: '8vh auto', padding: 24 }}><Card>
+  if (reset) return <main className="auth-page"><Card title="找回密码"><Typography.Paragraph>请联系管理员核实身份后重置密码。重置后原登录会话将失效。</Typography.Paragraph><Link to="/login">返回登录</Link></Card></main>
+  return <main className="auth-page"><Card>
     <Typography.Title level={2}>{reset ? '找回密码' : '注册账号'}</Typography.Title>
     {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
     <Form form={form} layout="vertical" onFinish={async (values) => {

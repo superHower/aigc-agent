@@ -54,6 +54,34 @@ def test_reference_mode_and_validation(tmp_path):
         plan_multi_image(MultiImageRequest(source_ids=["src_1"], prompt="背景", ocr_enabled=True), sources, {}, tmp_path)
 
 
+def test_reference_full_instructions_preserved_for_each_target_and_ratio(tmp_path):
+    sources = make_sources(tmp_path, 3)
+    instructions = "将背景换成参考图中的场景。\n调整产品位置和阴影，保留文字，不要增加其他物品。" + "保留细节。" * 250
+    payload = MultiImageRequest(
+        source_ids=["src_3", "src_2"], mode="reference", reference_file_id="src_1",
+        prompt=instructions, reference_component="背景", aspect_ratios=["original", "1:1"],
+    )
+    _, jobs, _, rule = plan_multi_image(payload, sources, {}, tmp_path)
+    assert len(jobs) == 4
+    assert rule["reference_paths"] == [sources["src_1"]["path"]]
+    for job in jobs:
+        assert "第一张输入图是当前待处理图片，第二张输入图是参考图" in job["prompt"]
+        assert f"请根据以下用户要求编辑第一张图片：\n{instructions}\n输出画布比例" in job["prompt"]
+        assert "用户未提及的部分默认尽量保留" in job["prompt"]
+        assert "其他内容不变" not in job["prompt"]
+        assert "【" not in job["prompt"]
+        assert job["input_path"] == sources[job["source_id"]]["path"]
+
+
+def test_reference_requires_instructions(tmp_path):
+    sources = make_sources(tmp_path, 2)
+    payload = MultiImageRequest(
+        source_ids=["src_2"], mode="reference", reference_file_id="src_1", prompt="  \n",
+    )
+    with pytest.raises(ValueError, match="请填写编辑要求"):
+        plan_multi_image(payload, sources, {}, tmp_path)
+
+
 def test_fit_output_does_not_stretch(tmp_path):
     path = tmp_path / "result.png"
     Image.new("RGB", (100, 50), "red").save(path)
@@ -221,9 +249,26 @@ def test_api_without_ocr_and_zip_order(tmp_path, monkeypatch):
     detail = client.get(f"/api/task/{task_id}").json()
     assert detail["max_concurrency"] == 10
     assert detail["jobs"][0]["output_filename"] == "图1-原比例.png"
+    assert detail["jobs"][0]["source_filename"] == "图1.png"
+    assert all(job["reference_urls"] == [] for job in detail["jobs"])
     response = client.get(f"/api/task/{task_id}/download")
     assert response.status_code == 200
     with ZipFile(io.BytesIO(response.content)) as archive:
         assert archive.namelist() == ["图1-原比例.png", "图2-原比例.png", "图3-原比例.png"]
     assert client.post("/api/generate/multi-image", json={"source_ids": ["src_1"], "prompt": "背景", "ocr_enabled": True}).status_code == 422
     assert client.get("/api/task/unknown/download").status_code == 404
+    response = client.post("/api/generate/multi-image", json={
+        "source_ids": ["src_2", "src_3"], "mode": "reference",
+        "reference_file_id": "src_1", "prompt": "参考背景，保留产品文字",
+    })
+    assert response.status_code == 200
+    reference_detail = client.get(f"/api/task/{response.json()['task_id']}").json()
+    assert all(job["reference_urls"] == ["/api/files/src_1"] for job in reference_detail["jobs"])
+    assert client.get(reference_detail["jobs"][0]["reference_urls"][0]).status_code == 200
+    assert {job["source_id"] for job in reference_detail["jobs"]} == {"src_2", "src_3"}
+    for job in reference_detail["jobs"]:
+        assert job["source_filename"] == sources[job["source_id"]]["original_name"]
+        assert job["prompt"] == store.get_job(job["id"])["prompt"]
+        assert "参考背景，保留产品文字" in job["prompt"]
+        assert "第一张输入图是当前待处理图片" in job["prompt"]
+        assert "输出画布比例为 40:20" in job["prompt"]

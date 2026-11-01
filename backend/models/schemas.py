@@ -165,7 +165,7 @@ class MultiImageRequest(BaseModel):
     prompt: str = Field(default="", max_length=32000)
     aspect_ratios: list[Literal["original", "1:1", "3:4", "16:9"]] = Field(default_factory=lambda: ["original"], min_length=1, max_length=4)
     reference_file_id: str | None = None
-    reference_component: str = Field(default="背景", min_length=1, max_length=1000)
+    reference_component: str = Field(default="", max_length=1000)
     ocr_enabled: bool = False
     per_source_overrides: dict[str, SourceOverrides] = Field(default_factory=dict)
     quality: Literal["low", "medium", "high", "xhigh", "max", "auto"] = "high"
@@ -223,6 +223,9 @@ class RefineRequest(BaseModel):
 
 
 class JobView(BaseModel):
+    source_filename: str | None = None
+    prompt: str = ""
+    reference_urls: list[str] = Field(default_factory=list)
     duration_seconds: float | None = None
     channel_name: str | None = None
     id: str

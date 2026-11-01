@@ -7,7 +7,7 @@ export function Login() {
   const location = useLocation()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  return <main style={{ maxWidth: 420, margin: '12vh auto', padding: 24 }}>
+  return <main className="auth-page">
     <Card>
       <Typography.Title level={2}>AI 生图</Typography.Title>
       <Typography.Paragraph type="secondary">登录后管理自己的图片、任务和模板。</Typography.Paragraph>

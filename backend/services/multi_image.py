@@ -34,8 +34,8 @@ def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[s
             raise ValueError("参考图片不能同时作为待处理图片")
         if payload.ocr_enabled:
             raise ValueError("参考图组合模式不启用 OCR")
-        if not payload.reference_component.strip():
-            raise ValueError("请填写要替换的内容，例如背景")
+        if not payload.prompt.strip() and not payload.reference_component.strip():
+            raise ValueError("请填写编辑要求")
     source_ids = sorted(payload.source_ids, key=lambda source_id: natural_key(sources[source_id]["original_name"]))
     rule = {"size": "auto", "quality": payload.quality, "output_format": "png", "multi_image": True,
             "reference_paths": [sources[payload.reference_file_id]["path"]] if payload.mode == "reference" else [], "outputs": {}}
@@ -71,7 +71,15 @@ def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[s
         create_mask(source["width"], source["height"], (0, 0, source["width"], source["height"]), full_mask)
         for ratio in payload.aspect_ratios:
             width, height = (source["width"], source["height"]) if ratio == "original" else RATIO_SIZES[ratio]
-            prompt = payload.prompt.strip() if payload.mode == "shared" else f"第一张输入图是待处理图片，第二张是参考图。请把第一张图的【{payload.reference_component.strip()}】替换为第二张图的对应内容，其他内容不变。"
+            prompt = payload.prompt.strip()
+            if payload.mode == "reference":
+                # Keep supporting replacement-only requests from older clients.
+                instructions = prompt or f"请把第一张图的【{payload.reference_component.strip()}】替换为第二张图的对应内容，其他内容不变。"
+                prompt = (
+                    "第一张输入图是当前待处理图片，第二张输入图是参考图。"
+                    "用户未提及的部分默认尽量保留；用户明确要求修改的部分按用户要求执行。"
+                    f"\n请根据以下用户要求编辑第一张图片：\n{instructions}"
+                )
             prompt += f"\n输出画布比例为 {width}:{height}。必须保持主体、文字和其他内容的自然比例，禁止拉伸、挤压或变形。可调整布局、间距或扩展背景来适配画布，保留完整主体。"
             job_id = f"multi_{uuid4().hex}"
             base = f"{safe_stem(source['original_name'])}-{RATIO_LABELS[ratio]}"
