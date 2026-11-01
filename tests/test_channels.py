@@ -1,4 +1,7 @@
 import asyncio
+import httpx
+import pytest
+from openai import APIStatusError
 from collections import Counter
 
 from PIL import Image
@@ -99,7 +102,8 @@ def test_round_robin_and_failed_channel_isolated(tmp_path):
         assert editors[0].calls == 3
         assert editors[0].cancelled == 2
         assert all('渠道0' in row['error'] and 'secret' not in row['error'] for row in result if row['status'] == 'failed')
-        assert len(pool.store.available()) == 3
+        assert len(pool.store.available()) == 4
+        assert len(pool.store.available('task')) == 3
         pool.store.reset(pool.store.list()[0]['id'])
         assert len(pool.store.available()) == 4
     asyncio.run(run())
@@ -153,6 +157,18 @@ def test_no_available_channel_does_not_retry(tmp_path):
         assert store.get_task('task')['status'] == 'failed'
         assert store.get_task('task')['auto_retry_count'] == 0
         assert '渠道0' in store.get_job('j')['error']
+        await manager.retry('task')
+        await manager.running_tasks['task']
+        assert editors[0].calls == 1
+        assert store.get_task('task')['status'] == 'failed'
+        editors[0].fail = False
+        new_jobs = [dict(jobs[0], id='new-job')]
+        new_rule = dict(rule, outputs={'new-job': {'variant': True}})
+        store.create_batch('new-task', ['src'], new_rule, new_jobs)
+        await manager.create_batch('new-task', {'src': new_jobs}, new_rule)
+        await manager.running_tasks['new-task']
+        assert editors[0].calls == 2
+        assert store.get_task('new-task')['status'] == 'completed'
     asyncio.run(run())
 
 
@@ -196,11 +212,48 @@ def test_channel_concurrency_shared_between_batches(tmp_path):
 def test_channel_timeout_stops_queued_calls(tmp_path):
     async def run():
         _, pool, editors = make_pool(tmp_path, count=1, concurrency=1)
-        runtime = pool.snapshot()[0]
+        runtime = pool.snapshot('timeout-task')[0]
         runtime.config['timeout'] = 0.001
         results = await asyncio.gather(*(pool.edit(runtime, job_id=f'job{i}') for i in range(4)), return_exceptions=True)
         assert all(isinstance(result, ChannelUnavailable) for result in results)
         assert editors[0].calls == 1
         assert editors[0].cancelled == 1
-        assert not pool.store.available()
+        assert pool.store.available()
+        assert not pool.store.available('timeout-task')
     asyncio.run(run())
+
+
+def test_network_failure_is_task_scoped_and_durable(tmp_path):
+    async def run():
+        store, pool, editors = make_pool(tmp_path, count=1, concurrency=1)
+        first = pool.snapshot('old-task')[0]
+        other = pool.snapshot('concurrent-task')[0]
+        assert first.semaphore is other.semaphore
+        pool.trip(first, ConnectionError('secret network error'))
+        assert first.broken.is_set()
+        assert not other.broken.is_set()
+        assert pool.snapshot('old-task') == []
+        assert len(pool.snapshot('new-task')) == 1
+        assert not pool.store.list()[0]['last_error']
+        reopened = ChannelStore(TaskStore(tmp_path / 'tasks.db'))
+        assert not reopened.available('old-task')
+        assert len(reopened.available('new-task')) == 1
+        await pool.edit(other, job_id='other')
+        assert editors[0].calls == 1
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('status,body', [(402, {}), (403, {'message': '余额不足 secret'}), (429, {'code': 'insufficient_quota'})])
+def test_insufficient_balance_pauses_every_task(tmp_path, status, body):
+    store, pool, _ = make_pool(tmp_path, count=1)
+    first = pool.snapshot('first')[0]
+    other = pool.snapshot('other')[0]
+    exc = APIStatusError('upstream secret', response=httpx.Response(status, request=httpx.Request('POST', 'https://example.com')), body=body)
+    pool.trip(first, exc)
+    assert first.broken.is_set() and other.broken.is_set()
+    assert not pool.store.available()
+    assert not pool.snapshot('new-task')
+    assert '余额不足' in pool.store.list()[0]['last_error']
+    assert 'secret' not in pool.store.list()[0]['last_error']
+    pool.store.reset(first.config['id'])
+    assert len(pool.snapshot('new-task')) == 1

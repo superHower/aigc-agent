@@ -239,7 +239,7 @@ class TaskManager:
         try:
             while True:
                 await self._run_batch_round(task_id, source_jobs, rule)
-                if not self.channel_pool or not self.channel_pool.store.available():
+                if not self.channel_pool or not self.channel_pool.store.available(task_id):
                     break
                 if not self.store.prepare_auto_retry(task_id, scope):
                     break
@@ -260,17 +260,19 @@ class TaskManager:
             raise
         finally:
             self.assignments.pop(task_id, None)
+            if self.channel_pool:
+                self.channel_pool.release_task(task_id)
 
     async def _run_batch_round(self, task_id: str, source_jobs: dict[str, list[dict[str, str]]], rule: dict) -> None:
         if self.channel_pool:
-            channels = self.channel_pool.snapshot()
+            channels = self.channel_pool.snapshot(task_id)
             all_jobs = [job for jobs in source_jobs.values() for job in jobs
                         if (stored := self.store.get_job(job["id"])) and stored["status"] == "pending"]
             if not channels:
                 for job in all_jobs:
                     stored = self.store.get_job(job["id"])
                     if stored and stored["status"] == "pending":
-                        self.store.update_job(job["id"], status="cancelled" if stored["cancel_requested"] else "failed", error="没有可用渠道，请在渠道管理中添加或恢复渠道")
+                        self.store.update_job(job["id"], status="cancelled" if stored["cancel_requested"] else "failed", error="当前任务没有可用渠道，部分渠道可能因网络异常已在此任务中排除")
                 return
             # Give final outputs their own round-robin so OCR prerequisites do not skew allocation.
             variants = [job for job in all_jobs if job["step"].startswith("custom_")]

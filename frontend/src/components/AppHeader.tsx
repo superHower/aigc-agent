@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react'
-import { Button, Drawer, Layout, Popover, Space, Tag, Typography } from 'antd'
+import { Badge, Button, Drawer, Layout, Popover, Space, Tag, Typography } from 'antd'
 import { AppstoreOutlined, DownOutlined, MenuOutlined, UserOutlined } from '@ant-design/icons'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
@@ -21,6 +21,18 @@ export function AppHeader() {
   const [account, setAccount] = useState<Account>()
   const [unavailable, setUnavailable] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [channelAlerts, setChannelAlerts] = useState<{ id: string; name: string; error: string }[]>([])
+  useEffect(() => {
+    if (!isAdmin) return
+    let disposed = false
+    const refresh = () => api.get('/channels/alerts').then(response => {
+      if (!disposed) setChannelAlerts(response.data.items)
+    }).catch(() => {})
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 10000)
+    window.addEventListener('focus', refresh)
+    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener('focus', refresh) }
+  }, [isAdmin, location.pathname])
   useEffect(() => {
     if (!user || isAdmin) return
     let disposed = false
@@ -44,6 +56,7 @@ export function AppHeader() {
   const currentManagement = management.find(item => item.key === location.pathname)
   const details = <div className="account-popover">
     <Space><UserOutlined /><Typography.Text strong>{user?.username}</Typography.Text><Tag color={isAdmin ? 'purple' : account?.active ? 'blue' : 'default'}>{isAdmin ? '超级管理员' : account?.active ? '会员' : '普通用户'}</Tag></Space>
+    {isAdmin && channelAlerts.length > 0 && <div style={{ marginTop: 12 }}>{channelAlerts.map(alert => <Typography.Paragraph key={alert.id} type="danger">{alert.error}</Typography.Paragraph>)}<Button danger onClick={() => navigate('/channels')}>查看异常渠道</Button></div>}
     {isAdmin ? <><p>生图不限积分使用，无需购买套餐。</p><Typography.Text type="secondary">管理用户、充值、渠道和平台数据。</Typography.Text></> : <>
       {unavailable && <p>账户信息暂时无法更新，请稍后重试。</p>}
       <p>可用积分：{account?.available ?? '—'}　冻结：{account?.frozen ?? '—'}</p>
@@ -62,7 +75,8 @@ export function AppHeader() {
     </nav>
     <div className="header-account">
       {isAdmin ? <span className="header-credit">不限使用</span> : <Button type="text" className="header-credit" onClick={() => navigate('/account/credits')}>{unavailable ? '积分待更新' : `积分 ${account?.available ?? '—'}`}</Button>}
-      <Popover content={details} trigger={['hover', 'click']} placement="bottomRight"><Button type="text" className="header-username" icon={<UserOutlined />} aria-label={`${user?.username}的账户信息`}>{user?.username}<DownOutlined /></Button></Popover>
+      {isAdmin && channelAlerts.length > 0 && <Button type="text" danger onClick={() => navigate('/channels')}>渠道异常 ({channelAlerts.length})</Button>}
+      <Popover content={details} trigger={['hover', 'click']} placement="bottomRight"><Badge dot={isAdmin && channelAlerts.length > 0}><Button type="text" className="header-username" icon={<UserOutlined />} aria-label={`${user?.username}的账户信息`}>{user?.username}<DownOutlined /></Button></Badge></Popover>
     </div>
   </Layout.Header></>
 }

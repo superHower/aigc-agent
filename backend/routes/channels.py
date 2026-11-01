@@ -12,6 +12,12 @@ def list_channels(request: Request):
     return {"items": [store.public(row) for row in store.list()]}
 
 
+@router.get("/alerts")
+def channel_alerts(request: Request):
+    return {"items": [{"id": row["id"], "name": row["name"], "error": row["last_error"]}
+                      for row in request.app.state.channels.list() if row["last_error"]]}
+
+
 @router.post("")
 def create_channel(payload: ChannelInput, request: Request):
     try:
