@@ -230,6 +230,21 @@ def migrate(store):
                 id TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires_at TEXT NOT NULL
             )''')
             stamp(db, 8)
+        if 9 not in applied:
+            db.executescript('''
+                CREATE TABLE prompt_groups (
+                    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id),
+                    name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(owner_id, name)
+                );
+                CREATE TABLE prompt_group_members (
+                    group_id TEXT NOT NULL REFERENCES prompt_groups(id) ON DELETE CASCADE,
+                    template_id TEXT NOT NULL REFERENCES prompt_templates(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY(group_id, template_id), UNIQUE(group_id, position)
+                );
+            ''')
+            stamp(db, 9)
 
 
 def stamp(db, version):

@@ -431,7 +431,11 @@ async def generate_multi_image(payload: MultiImageRequest, request: Request):
     current = state(request)
     user = current_user(request)
     key = credits.require_key(request) if user['role'] != 'admin' else request.headers.get('Idempotency-Key')
-    digest = credits.fingerprint(payload.model_dump())
+    prompt_group = resolve_generation_group(payload, request)
+    fingerprint_payload = payload.model_dump()
+    if prompt_group:
+        fingerprint_payload['prompt_group_snapshot'] = prompt_group
+    digest = credits.fingerprint(fingerprint_payload)
     if key:
         with current.store.transaction() as db:
             existing = credits.previous(db, user['id'], 'create', key, digest)
@@ -458,7 +462,7 @@ async def generate_multi_image(payload: MultiImageRequest, request: Request):
             if cached:
                 analyses[source_id] = AnalyzeResponse.model_validate_json('{"files":[' + cached + ']}').files[0]
     try:
-        source_ids, jobs, source_jobs, rule = await asyncio.to_thread(plan_multi_image, payload, sources, analyses, current.settings.data_dir)
+        source_ids, jobs, source_jobs, rule = await asyncio.to_thread(plan_multi_image, payload, sources, analyses, current.settings.data_dir, prompt_group)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     task_id = f"task_{uuid4().hex}"
@@ -470,13 +474,28 @@ async def generate_multi_image(payload: MultiImageRequest, request: Request):
 
 @app.post('/api/generate/preview')
 async def generation_preview(payload: MultiImageRequest, request: Request):
+    prompt_group = resolve_generation_group(payload, request)
     ids = payload.source_ids + ([payload.reference_file_id] if payload.reference_file_id else [])
     for file_id in ids:
         require_file(request, file_id, purposes={'source', 'output', 'composite'})
-    count = len(payload.source_ids) * len(payload.aspect_ratios)
+    count = len(prompt_group['templates']) if prompt_group else len(payload.source_ids) * len(payload.aspect_ratios)
     user = current_user(request)
     available = credits.balance(state(request).store, user['id'])['available']
     return {'images': count, 'required_credits': count if user['role'] != 'admin' else 0, 'available': available}
+
+
+def resolve_generation_group(payload, request):
+    if payload.mode != 'prompt_group':
+        return None
+    from backend.services.multi_image import validate_prompt_group_request
+    from backend.services.prompt_groups import resolve_group
+    try:
+        validate_prompt_group_request(payload)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    with state(request).store.transaction() as db:
+        group, templates = resolve_group(db, payload.prompt_group_id, current_user(request))
+    return {'id': group['id'], 'name': group['name'], 'templates': templates}
 
 
 @app.post("/api/prompt/preview", response_model=PromptPreviewResponse)
@@ -616,6 +635,9 @@ def task_view(request: Request, task_id: str) -> TaskView:
             "completed_jobs": sum(job.status == "done" for job in source_jobs),
         })
     return TaskView(
+        mode=rule.get("mode") if rule.get("mode") in {"shared", "reference", "prompt_group"} else (
+            ("reference" if reference_paths else "shared") if rule.get("multi_image") else None
+        ),
         credit_summary=task_credit_summary(current.store, task_id),
         auto_retry_count=task["auto_retry_count"],
         id=task["id"], status=task["status"], created_at=task["created_at"],

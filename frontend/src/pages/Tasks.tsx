@@ -44,6 +44,7 @@ export function Tasks() {
           </Link>
           <div className="task-history-footer">
             <dl className="task-history-meta">
+              <div><dt>模式</dt><dd><Tag>{task.mode === 'reference' ? '参考图组合模式' : task.mode === 'shared' ? '多图共用提示词模式' : task.mode === 'prompt_group' ? '一图多提示词模式' : '其他模式'}</Tag></dd></div>
               <div><dt>状态</dt><dd><Tag color={colors[task.status]}>{task.status}</Tag></dd></div>
               <div className="task-history-progress"><dt>进度</dt><dd>{task.completed_jobs}/{task.total_jobs}</dd></div>
               <div className="task-history-updated"><dt>更新时间</dt><dd>{task.updated_at ? <time dateTime={task.updated_at}>{new Date(task.updated_at).toLocaleString()}</time> : '—'}</dd></div>

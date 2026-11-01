@@ -5,6 +5,7 @@ import { AppHeader } from '../components/AppHeader'
 import { PromptTemplateEditor } from '../components/PromptTemplateEditor'
 import { categoryOptions, filterTemplates, usePromptLibrary } from '../hooks/usePromptLibrary'
 import { useAuth } from '../components/AuthProvider'
+import { PromptGroupManager } from '../components/PromptGroupManager'
 
 export function Prompts() {
   const library = usePromptLibrary()
@@ -15,6 +16,7 @@ export function Prompts() {
   const [editing, setEditing] = useState<PromptTemplate>()
   const [preview, setPreview] = useState<PromptTemplate>()
   const [categoriesOpen, setCategoriesOpen] = useState(false)
+  const [groupsOpen, setGroupsOpen] = useState(false)
   const [categoryEditorOpen, setCategoryEditorOpen] = useState(false)
   const [editingCategory, setEditingCategory] = useState<PromptCategory>()
   const [busy, setBusy] = useState(false)
@@ -69,7 +71,7 @@ export function Prompts() {
     finally { setImporting(false) }
   }
   return <Layout className="app-shell"><AppHeader /><Layout.Content className="workspace-content">
-    <Card className="panel-card" title="提示词管理" extra={<Space wrap><Button loading={exporting} onClick={() => void exportExcel()}>导出 Excel</Button><Button onClick={() => { setImportError(''); setImportFile(undefined); setImportOpen(true) }}>批量导入</Button><Button onClick={() => setCategoriesOpen(true)}>管理分类</Button><Button type="primary" onClick={() => { setEditing(undefined); setEditorOpen(true) }}>新建模板</Button></Space>}>
+    <Card className="panel-card" title="提示词管理" extra={<Space wrap><Button loading={exporting} onClick={() => void exportExcel()}>导出 Excel</Button><Button onClick={() => { setImportError(''); setImportFile(undefined); setImportOpen(true) }}>批量导入</Button><Button onClick={() => setGroupsOpen(true)}>管理提示词组</Button><Button onClick={() => setCategoriesOpen(true)}>管理分类</Button><Button type="primary" onClick={() => { setEditing(undefined); setEditorOpen(true) }}>新建模板</Button></Space>}>
       <Typography.Paragraph type="secondary">保存常用提示词，在工作台按分类选择模板后直接填入，也可继续修改。</Typography.Paragraph>
       {library.error && <Alert type="error" message={library.error} action={<Button onClick={() => void library.refresh()}>重试</Button>} />}
       <Space wrap className="option-row">
@@ -91,6 +93,7 @@ export function Prompts() {
       <Upload accept=".xlsx" maxCount={1} disabled={importing} fileList={importFile ? [{ uid: 'import', name: importFile.name, status: 'done' }] : []} beforeUpload={file => { if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 5 * 1024 * 1024) { setImportError('请选择不超过 5 MB 的 .xlsx 文件'); return Upload.LIST_IGNORE } setImportFile(file); setImportError(''); return false }} onRemove={() => { setImportFile(undefined); return true }}><Button disabled={importing}>选择 Excel 文件</Button></Upload>
       {importError && <Alert type="error" message={importError} style={{ marginTop: 16 }} />}
     </Modal>
+    <PromptGroupManager open={groupsOpen} templates={library.templates} onClose={() => setGroupsOpen(false)} />
     <PromptTemplateEditor open={editorOpen} template={editing} categories={library.categories} onClose={() => setEditorOpen(false)} onSaved={() => void library.refresh()} />
     <Modal title={preview?.name} open={!!preview} onCancel={() => setPreview(undefined)} footer={<Button onClick={() => setPreview(undefined)}>关闭</Button>} width={720}><div className="prompt-preview">{preview?.content}</div></Modal>
     <Modal title="管理分类" open={categoriesOpen} onCancel={() => setCategoriesOpen(false)} footer={<Button type="primary" onClick={() => editCategory()}>新增分类</Button>}>

@@ -4,23 +4,19 @@ import {
   Button,
   Card,
   Checkbox,
-  Col,
-  Image,
   Popconfirm,
   Input,
   Layout,
   Progress,
-  Row,
   Select,
   Space,
   Switch,
   Tabs,
   Tag,
   Typography,
-  Upload,
   message,
 } from 'antd'
-import { InboxOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { PlayCircleOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import type { UploadProps } from 'antd'
 import {
@@ -31,6 +27,8 @@ import {
   api,
   promptError,
   idempotencyKey,
+  listPromptGroups,
+  type PromptGroup,
   type AnalysisFile,
   type UploadedFile,
 } from '../api/client'
@@ -41,6 +39,8 @@ import { AppHeader } from '../components/AppHeader'
 import { TaskResults } from '../components/TaskResults'
 import { PromptTemplatePicker } from '../components/PromptTemplatePicker'
 import { useAuth } from '../components/AuthProvider'
+import { usePromptLibrary } from '../hooks/usePromptLibrary'
+import { WorkspaceUpload } from '../components/WorkspaceUpload'
 
 const ratioOptions = [
   { label: '原比例', value: 'original' },
@@ -49,6 +49,8 @@ const ratioOptions = [
   { label: '16:9', value: '16:9' },
 ]
 const terminalStatuses = ['completed', 'partial_failed', 'failed', 'cancelled']
+const naturalProportionsInstruction = '必须保持主体、文字和其他内容的自然比例，禁止拉伸、挤压或变形。'
+const canvasAdaptationInstruction = '可调整布局、间距或扩展背景来适配画布，保留完整主体。'
 
 export function Workspace() {
   const { user } = useAuth()
@@ -65,7 +67,10 @@ export function Workspace() {
     const timer = window.setInterval(() => void refresh(), 10000)
     return () => window.clearInterval(timer)
   }, [isAdmin])
-  const [files, setFiles] = useState<UploadedFile[]>([])
+  const [sharedFiles, setSharedFiles] = useState<UploadedFile[]>([])
+  const [referenceFiles, setReferenceFiles] = useState<UploadedFile[]>([])
+  const [targetFiles, setTargetFiles] = useState<UploadedFile[]>([])
+  const [groupFiles, setGroupFiles] = useState<UploadedFile[]>([])
   const [analysis, setAnalysis] = useState<AnalysisFile[]>([])
   const [ocrEnabled, setOcrEnabled] = useState(false)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -73,12 +78,35 @@ export function Workspace() {
   const [replacements, setReplacements] = useState<
     Record<string, Record<string, { replace: string; enabled: boolean }>>
   >({})
-  const [mode, setMode] = useState<'shared' | 'reference'>('shared')
+  const [mode, setMode] = useState<'shared' | 'reference' | 'prompt_group'>('shared')
+  const library = usePromptLibrary()
+  const [promptGroups, setPromptGroups] = useState<PromptGroup[]>([])
+  const [promptGroupId, setPromptGroupId] = useState<string>()
+  const [groupError, setGroupError] = useState('')
+  const [groupsLoading, setGroupsLoading] = useState(false)
+  const refreshGroups = async () => {
+    setGroupsLoading(true)
+    try { setPromptGroups(await listPromptGroups()); setGroupError('') }
+    catch (reason) { setGroupError(promptError(reason)) }
+    finally { setGroupsLoading(false) }
+  }
+  useEffect(() => { if (mode === 'prompt_group') { void refreshGroups(); void library.refresh() } }, [mode])
   const [prompt, setPrompt] = useState('')
   const [ratios, setRatios] = useState<string[]>(['original'])
-  const [targets, setTargets] = useState<string[]>([])
-  const [referenceId, setReferenceId] = useState<string>()
+  const files = mode === 'shared' ? sharedFiles : mode === 'reference' ? targetFiles : groupFiles
+  const setFiles = mode === 'shared' ? setSharedFiles : mode === 'reference' ? setTargetFiles : setGroupFiles
+  const referenceId = referenceFiles[0]?.file_id
   const [referencePrompt, setReferencePrompt] = useState('')
+  const activePrompt = mode === 'reference' ? referencePrompt : prompt
+  const togglePromptInstruction = (instruction: string, enabled: boolean) => {
+    const update = (value: string) => {
+      if (enabled) return value.includes(instruction)
+        ? value : `${value}${value && !value.endsWith('\n') ? '\n' : ''}${instruction}`
+      return value.replace(`\n${instruction}`, '').replace(instruction, '')
+    }
+    if (mode === 'reference') setReferencePrompt(update)
+    else setPrompt(update)
+  }
   const [quality, setQuality] = useState('high')
   const [rightsConfirmed, setRightsConfirmed] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -89,7 +117,10 @@ export function Workspace() {
   const { task, error: taskError, refresh: refreshTask } = useTaskProgress(taskId)
   const currentFile = files.find((file) => file.file_id === selectedFile) ?? files[0]
   const currentAnalysis = analysis.find((item) => item.file_id === currentFile?.file_id)
-  const sourceIds = mode === 'shared' ? files.map((file) => file.file_id) : targets
+  const sourceIds = files.map(file => file.file_id)
+  const selectedGroup = promptGroups.find(group => group.id === promptGroupId)
+  const groupTemplates = selectedGroup?.template_ids.map(id => library.templates.find(template => template.id === id)) ?? []
+  const imageCount = mode === 'prompt_group' ? (sourceIds.length ? groupTemplates.length : 0) : sourceIds.length * ratios.length
   const ocrSteps =
     ocrEnabled && mode === 'shared'
       ? analysis.reduce(
@@ -106,7 +137,6 @@ export function Workspace() {
           0,
         )
       : 0
-  const fileOptions = files.map((file) => ({ value: file.file_id, label: file.filename }))
 
   const removeFile = (fileId: string) => {
     setFiles((previous) => {
@@ -118,8 +148,6 @@ export function Workspace() {
       return next
     })
     setAnalysis((previous) => previous.filter((item) => item.file_id !== fileId))
-    setTargets((previous) => previous.filter((id) => id !== fileId))
-    setReferenceId((previous) => previous === fileId ? undefined : previous)
   }
 
   const analyze = async (uploaded: UploadedFile[]) => {
@@ -140,40 +168,38 @@ export function Workspace() {
     }
   }
 
-  const uploadProps: UploadProps = {
-    multiple: true,
-    fileList: [],
-    accept: 'image/png,image/jpeg,image/webp',
-    showUploadList: false,
-    disabled: uploading || analyzing,
-    beforeUpload: async (file, fileList) => {
-      if (file !== fileList[fileList.length - 1] || uploadInProgress.current) return false
-      if (files.length + fileList.length > 50) {
-        message.warning('最多上传 50 张图片')
+  const makeUploadProps = (role: 'source' | 'reference'): UploadProps => {
+    const existing = role === 'reference' ? referenceFiles : files
+    const limit = role === 'reference' || mode === 'prompt_group' ? 1 : 50
+    const save = role === 'reference' ? setReferenceFiles : setFiles
+    return {
+      multiple: limit > 1,
+      fileList: [],
+      accept: 'image/png,image/jpeg,image/webp',
+      showUploadList: false,
+      disabled: uploading || analyzing || submitting,
+      beforeUpload: async (file, batch) => {
+        if (file !== batch[batch.length - 1] || uploadInProgress.current) return false
+        if (batch.length > limit || (limit > 1 && existing.length + batch.length > limit)) {
+          message.warning(`最多上传 ${limit} 张图片`)
+          return false
+        }
+        uploadInProgress.current = true
+        setUploading(true)
+        try {
+          const result = await uploadFiles([...batch].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true })))
+          const next = (limit === 1 ? result.files : [...existing, ...result.files]).sort((a, b) => a.filename.localeCompare(b.filename, 'zh-CN', { numeric: true }))
+          save(next)
+          if (role === 'source') {
+            setSelectedFile(next[0]?.file_id ?? null)
+            setActiveBlockId(null)
+            if (ocrEnabled && mode === 'shared') await analyze(result.files)
+          }
+        } catch (reason) { message.error(promptError(reason)) }
+        finally { uploadInProgress.current = false; setUploading(false) }
         return false
-      }
-      uploadInProgress.current = true
-      setUploading(true)
-      try {
-        const result = await uploadFiles(
-          [...fileList].sort((first, second) =>
-            first.name.localeCompare(second.name, 'zh-CN', { numeric: true }),
-          ),
-        )
-        const next = [...files, ...result.files].sort((first, second) =>
-          first.filename.localeCompare(second.filename, 'zh-CN', { numeric: true }),
-        )
-        setFiles(next)
-        setSelectedFile((previous) => previous ?? next[0]?.file_id ?? null)
-        if (ocrEnabled && mode === 'shared') await analyze(result.files)
-      } catch (reason) {
-        message.error(reason instanceof Error ? reason.message : '上传失败')
-      } finally {
-        uploadInProgress.current = false
-        setUploading(false)
-      }
-      return false
-    },
+      },
+    }
   }
 
   const generate = async () => {
@@ -181,7 +207,7 @@ export function Workspace() {
       message.warning('请确认拥有素材使用权')
       return
     }
-    if (!sourceIds.length || !ratios.length) {
+    if (!sourceIds.length || (mode !== 'prompt_group' && !ratios.length)) {
       message.warning('请选择待处理图片和至少一种比例')
       return
     }
@@ -191,6 +217,10 @@ export function Workspace() {
     }
     if (mode === 'reference' && (!referenceId || !referencePrompt.trim())) {
       message.warning('请选择参考图并填写编辑要求')
+      return
+    }
+    if (mode === 'prompt_group' && (!selectedGroup || !groupTemplates.length || groupTemplates.some(template => !template) || groupError || library.error)) {
+      message.warning('请选择非空且有效的提示词组，可刷新或前往提示词管理编辑')
       return
     }
     const overrides = Object.fromEntries(
@@ -209,11 +239,12 @@ export function Workspace() {
       const payload = {
         source_ids: sourceIds,
         mode,
-        prompt: mode === 'reference' ? referencePrompt : prompt,
-        aspect_ratios: ratios,
-        reference_file_id: referenceId,
+        prompt: mode === 'prompt_group' ? '' : mode === 'reference' ? referencePrompt : prompt,
+        aspect_ratios: mode === 'prompt_group' ? ['original'] : ratios,
+        prompt_group_id: mode === 'prompt_group' ? promptGroupId : undefined,
+        reference_file_id: mode === 'reference' ? referenceId : undefined,
         ocr_enabled: isAdmin && ocrEnabled && mode === 'shared',
-        per_source_overrides: overrides,
+        per_source_overrides: mode === 'prompt_group' ? {} : overrides,
         quality,
       }
       const preview = (await api.post('/generate/preview', payload)).data
@@ -247,78 +278,37 @@ export function Workspace() {
     <Layout className="app-shell">
       <AppHeader />
       <Layout.Content className="workspace-content">
-        <Row gutter={[18, 18]}>
-          <Col xs={24} lg={9}>
-            <Card title="上传图片" className="panel-card" extra={<Tag>{files.length} / 50</Tag>}>
-              <Space wrap className="option-row">
-                {ocrEnabled && mode === 'shared' && (
-                  <Button
-                    size="small"
-                    loading={analyzing}
-                    disabled={!files.length || uploading}
-                    onClick={() => void analyze(files)}
-                  >
-                    重新识别
-                  </Button>
-                )}
-              </Space>
-              <Upload.Dragger {...uploadProps}>
-                <p className="ant-upload-drag-icon">
-                  <InboxOutlined />
-                </p>
-                <p className="ant-upload-text">
-                  {uploading
-                    ? '正在上传…'
-                    : analyzing
-                      ? '正在 OCR 识别…'
-                      : '拖入或选择图片，最多 50 张'}
-                </p>
-                <p className="ant-upload-hint">
-                  PNG、JPG、WebP · 按文件名自然排序 · OCR 关闭时仅上传
-                </p>
-              </Upload.Dragger>
-              <div className="uploaded-grid">
-                  {files.map((file) => (
-                    <div className={`uploaded-item-wrap ${file.file_id === currentFile?.file_id ? 'uploaded-item-active' : ''}`} key={file.file_id}>
-                      <button type="button" className="uploaded-item" onClick={() => { setSelectedFile(file.file_id); setActiveBlockId(null) }}>
-                        <img src={file.url} alt={file.filename} />
-                        <span title={file.filename}>{file.filename}</span>
-                      </button>
-                      <Popconfirm title="移除这张图片？" description="只会从当前工作台移除，不删除服务器上的原文件。" okText="移除" cancelText="取消" onConfirm={() => removeFile(file.file_id)}>
-                        <Button className="uploaded-item-remove" type="text" danger size="small" aria-label={`删除${file.filename}`} onClick={(event) => event.stopPropagation()}>×</Button>
-                      </Popconfirm>
-                    </div>
-                  ))}
-              </div>
-              {currentFile &&
-                (ocrEnabled && mode === 'shared' && currentAnalysis ? (
-                  <AnnotatedImage
-                    analysis={currentAnalysis}
-                    activeBlockId={activeBlockId}
-                    onSelect={(block) => setActiveBlockId(block.id)}
-                  />
-                ) : (
-                  <Image src={currentFile.url} alt={currentFile.filename} />
-                ))}
-              {currentAnalysis?.error && ocrEnabled && (
-                <Alert type="error" message={currentAnalysis.error} />
-              )}
-            </Card>
-          </Col>
-          <Col xs={24} lg={15}>
-            <Card title="批量生成模式" className="panel-card">
               <Tabs
                 activeKey={mode}
                 items={[
-                  { key: 'shared', label: '多图', disabled: uploading || analyzing },
-                  { key: 'reference', label: '参考图组合', disabled: uploading || analyzing },
+                  { key: 'shared', label: '多图共用提示词', disabled: uploading || analyzing || submitting },
+                  { key: 'reference', label: '参考图组合', disabled: uploading || analyzing || submitting },
+                  { key: 'prompt_group', label: '一图多提示词', disabled: uploading || analyzing || submitting },
                 ]}
                 onChange={(value) => {
-                  setMode(value as 'shared' | 'reference')
-                  if (value === 'reference') setOcrEnabled(false)
+                  setMode(value as 'shared' | 'reference' | 'prompt_group')
+                  if (value !== 'shared') setOcrEnabled(false)
+                  setSelectedFile(null)
+                  setActiveBlockId(null)
                 }}
               />
-              {mode === 'shared' ? (
+              <div className={mode === 'reference' ? 'workspace-reference-uploads' : undefined}>
+                {mode === 'reference' && <WorkspaceUpload title="参考图" files={referenceFiles} limit={1} uploadProps={makeUploadProps('reference')} onRemove={() => setReferenceFiles([])} />}
+                <WorkspaceUpload title={mode === 'shared' ? '上传图片' : '待处理图'} files={files} limit={mode === 'prompt_group' ? 1 : 50} uploadProps={makeUploadProps('source')} onRemove={removeFile} selectedId={currentFile?.file_id} onSelect={setSelectedFile} />
+              </div>
+              {ocrEnabled && mode === 'shared' && currentAnalysis && <Card className="panel-card" title="文字识别预览"><AnnotatedImage analysis={currentAnalysis} activeBlockId={activeBlockId} onSelect={block => setActiveBlockId(block.id)} /></Card>}
+              <Card title={mode === 'prompt_group' ? '提示词组与生成设置' : '提示词与生成设置'} className="panel-card">
+              {mode === 'prompt_group' ? (
+                <Space direction="vertical" className="page-stack option-card">
+                  <Typography.Text strong>提示词组</Typography.Text>
+                  <Select aria-label="提示词组" value={promptGroupId} onChange={setPromptGroupId} loading={groupsLoading} placeholder="选择提示词组" options={promptGroups.map(group => ({ value: group.id, label: `${group.name}（${group.template_ids.length} 条）` }))} />
+                  <Space wrap><Button loading={groupsLoading || library.loading} onClick={() => { void refreshGroups(); void library.refresh() }}>刷新提示词组</Button><Link to="/prompts">管理提示词组</Link></Space>
+                  {(groupError || library.error) && <Alert type="error" message={groupError || library.error} />}
+                  {selectedGroup && !groupTemplates.length && <Alert type="warning" message="该组为空，请先添加提示词模板" />}
+                  {groupTemplates.map((template, index) => <Card size="small" key={selectedGroup!.template_ids[index]} title={`${index + 1}. ${template?.name ?? '模板已不可访问，请重新编辑组'}`}><Typography.Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }} ellipsis={{ rows: 3, expandable: true }}>{template?.content}</Typography.Paragraph></Card>)}
+                  <Typography.Text type="secondary">每条提示词独立处理同一张原图，按组内顺序各生成一张原比例图片。</Typography.Text>
+                </Space>
+              ) : mode === 'shared' ? (
                 <div className="option-card">
                   <Typography.Title level={5}>通用提示词</Typography.Title>
                   <PromptTemplatePicker value={prompt} onChange={setPrompt} />
@@ -331,28 +321,6 @@ export function Workspace() {
                 </div>
               ) : (
                 <Space direction="vertical" className="page-stack option-card">
-                  <Select
-                    style={{ width: '100%' }}
-                    value={referenceId}
-                    onChange={(value) => {
-                      setReferenceId(value)
-                      setTargets((previous) => previous.filter((id) => id !== value))
-                    }}
-                    placeholder="选择参考图片，例如图一"
-                    options={fileOptions}
-                  />
-                  <Typography.Text>
-                    每张待处理图片都会分别结合参考图执行编辑要求。
-                  </Typography.Text>
-                  <Checkbox disabled={!referenceId || !fileOptions.some(option => option.value !== referenceId)} checked={!!referenceId && targets.length === fileOptions.filter(option => option.value !== referenceId).length && targets.length > 0} indeterminate={targets.length > 0 && targets.length < fileOptions.filter(option => option.value !== referenceId).length} onChange={event => setTargets(event.target.checked ? fileOptions.filter(option => option.value !== referenceId).map(option => option.value) : [])}>全选待处理图片（不含参考图）</Checkbox>
-                  <Select
-                    mode="multiple"
-                    style={{ width: '100%' }}
-                    value={targets}
-                    onChange={setTargets}
-                    placeholder="选择待处理图片，例如图二、图三、图四"
-                    options={fileOptions.filter((option) => option.value !== referenceId)}
-                  />
                   <Typography.Title level={5} id="reference-prompt-label">编辑要求</Typography.Title>
                   <Typography.Text type="secondary" id="reference-prompt-help">
                     可以描述替换内容、参考方式、保留内容及其他限制。未提及的部分默认尽量保留。
@@ -372,12 +340,30 @@ export function Workspace() {
                 </Space>
               )}
               <Space direction="vertical" size="middle" className="page-stack">
+                {mode !== 'prompt_group' && <>
                 <Typography.Text strong>输出比例（每种比例生成一张，独立处理）</Typography.Text>
                 <Checkbox.Group
                   options={ratioOptions}
                   value={ratios}
                   onChange={(values) => setRatios(values.map(String))}
                 />
+                <Space>
+                  <Switch
+                    aria-label="保持自然比例"
+                    checked={activePrompt.includes(naturalProportionsInstruction)}
+                    onChange={(enabled) => togglePromptInstruction(naturalProportionsInstruction, enabled)}
+                  />
+                  <Typography.Text>保持自然比例</Typography.Text>
+                </Space>
+                <Space>
+                  <Switch
+                    aria-label="适配画布并保留完整主体"
+                    checked={activePrompt.includes(canvasAdaptationInstruction)}
+                    onChange={(enabled) => togglePromptInstruction(canvasAdaptationInstruction, enabled)}
+                  />
+                  <Typography.Text>适配画布并保留完整主体</Typography.Text>
+                </Space>
+                </>}
                 <Space>
                   <Typography.Text>质量</Typography.Text>
                   <Select
@@ -391,7 +377,7 @@ export function Workspace() {
                 </Space>
                 <Alert
                   type="info"
-                  message={isAdmin ? `预计生成 ${sourceIds.length * ratios.length} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}；成本请在经营总览按调用记录查看。` : `预计生成 ${sourceIds.length * ratios.length} 张，需要 ${sourceIds.length * ratios.length} 积分；可用 ${available ?? '加载中'}。成功扣费，最终失败或取消释放；文字识别免费。`}
+                  message={isAdmin ? `预计生成 ${imageCount} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}；成本请在经营总览按调用记录查看。` : `预计生成 ${imageCount} 张，需要 ${imageCount} 积分；可用 ${available ?? '加载中'}。成功扣费，最终失败或取消释放；文字识别免费。`}
                 />
               </Space>
             </Card>
@@ -432,7 +418,7 @@ export function Workspace() {
                   type="primary"
                   icon={<PlayCircleOutlined />}
                   loading={submitting}
-                  disabled={!files.length || uploading || analyzing || submitting || (!!task && !terminalStatuses.includes(task.status)) || (!isAdmin && (available === null || available < sourceIds.length * ratios.length))}
+                  disabled={!files.length || (mode === 'prompt_group' && (!imageCount || groupsLoading || library.loading || !!groupError || !!library.error || groupTemplates.some(template => !template))) || uploading || analyzing || submitting || (!!task && !terminalStatuses.includes(task.status)) || (!isAdmin && (available === null || available < imageCount))}
                   onClick={() => void generate()}
                 >
                   提交批量任务
@@ -500,7 +486,7 @@ export function Workspace() {
                   <Button
                     href={`/api/task/${taskId}/download`}
                     disabled={
-                      !task?.jobs.some((job) => job.output_url && job.step.startsWith('custom_'))
+                      !task?.jobs.some((job) => job.output_url && (job.step.startsWith('custom_') || job.step.startsWith('prompt_')))
                     }
                   >
                     {task && !terminalStatuses.includes(task.status)
@@ -511,8 +497,6 @@ export function Workspace() {
                 </div>
               </Card>
             )}
-          </Col>
-        </Row>
       </Layout.Content>
     </Layout>
   )

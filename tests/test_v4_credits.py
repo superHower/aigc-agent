@@ -164,6 +164,47 @@ def test_same_active_generation_reuses_task_with_new_idempotency_key(identity_ap
         assert db.execute('SELECT COUNT(*) FROM tasks WHERE owner_id=?', (user_id,)).fetchone()[0] == 1
 
 
+def test_prompt_group_generation_billing_and_snapshot(identity_app, monkeypatch):
+    from backend.main import app
+    store, codes, _ = identity_app
+    client, _ = signup(codes, '13800000019', 'group_user')
+    source = image_upload(client)
+    templates = [client.post('/api/prompt-templates', json={'name': name, 'content': content}).json()
+                 for name, content in [('白底', '改成白底'), ('场景', '改成客厅')]]
+    group_payload = {'name': '套图', 'template_ids': [item['id'] for item in templates]}
+    group = client.post('/api/prompt-groups', json=group_payload).json()
+    class FakeManager:
+        async def create_batch(self, task_id, chains, rule):
+            for chain in chains.values():
+                for job in chain:
+                    store.update_job(job['id'], status='done', output_path=job['input_path'])
+            store.finalize_task(task_id)
+    monkeypatch.setattr(app.state, 'manager', FakeManager(), raising=False)
+    payload = {'mode': 'prompt_group', 'source_ids': [source], 'prompt_group_id': group['id']}
+    preview = client.post('/api/generate/preview', json=payload)
+    assert preview.status_code == 200
+    assert preview.json()['images'] == preview.json()['required_credits'] == 2
+    response = client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'group-create'})
+    assert response.status_code == 200, response.text
+    task_id = response.json()['task_id']
+    assert response.json()['total_jobs'] == response.json()['required_credits'] == 2
+    assert client.get('/api/account/credits').json()['available'] == 1
+    assert client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'group-create'}).json()['task_id'] == task_id
+    detail = client.get(f'/api/task/{task_id}').json()
+    assert detail['mode'] == 'prompt_group'
+    assert [job['target_id'] for job in detail['jobs']] == group_payload['template_ids']
+    assert detail['jobs'][0]['prompt'].startswith('改成白底')
+    assert detail['jobs'][1]['prompt'].startswith('改成客厅')
+    assert client.put(f"/api/prompt-templates/{templates[0]['id']}", json={'name': '新版', 'content': '已修改'}).status_code == 200
+    assert client.delete(f"/api/prompt-groups/{group['id']}").status_code == 204
+    saved = json.loads(store.get_task(task_id)['edit_rule'])
+    assert saved['prompt_group']['templates'][0]['content'] == '改成白底'
+    assert client.get(f'/api/task/{task_id}').json()['jobs'][0]['prompt'] == detail['jobs'][0]['prompt']
+    assert client.post('/api/generate/preview', json=payload).status_code == 404
+    empty = client.post('/api/prompt-groups', json={'name': '空组'}).json()
+    assert client.post('/api/generate/preview', json={**payload, 'prompt_group_id': empty['id']}).status_code == 422
+
+
 def test_executor_cancellation_late_response_and_recovery_release(ledger, tmp_path):
     create(ledger, 'task', 2)
     image = tmp_path/'input.png'

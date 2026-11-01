@@ -71,6 +71,36 @@ def excel_file(rows):
     return output.getvalue()
 
 
+def test_prompt_groups_membership_order_permissions_and_deletion(client):
+    first = client.post('/api/prompt-templates', json={'name': '一', 'content': '内容一'}).json()
+    second = client.post('/api/prompt-templates', json={'name': '二', 'content': '内容二'}).json()
+    payload = {'name': '场景套图', 'template_ids': [second['id'], first['id']]}
+    response = client.post('/api/prompt-groups', json=payload)
+    assert response.status_code == 201
+    group = response.json()
+    assert group['template_ids'] == payload['template_ids']
+    assert client.post('/api/prompt-groups', json=payload).status_code == 409
+    assert client.post('/api/prompt-groups', json={**payload, 'template_ids': [first['id'], first['id']]}).status_code == 422
+    assert client.post('/api/prompt-groups', json={'name': '无效', 'template_ids': ['missing']}).status_code == 404
+    assert len(client.get('/api/prompt-groups').json()['items']) == 1
+    store = client.app.state.store
+    from backend.db.task_store import utc_now
+    with store.transaction() as db:
+        db.execute('INSERT INTO users (id,username,password_hash,role,created_at) VALUES (?,?,?,?,?)', ('other', 'other', 'unused', 'user', utc_now()))
+    client.app.state.test_user = {'id': 'other', 'role': 'user'}
+    assert client.get('/api/prompt-groups').json()['items'] == []
+    assert client.put(f"/api/prompt-groups/{group['id']}", json=payload).status_code == 404
+    assert client.delete(f"/api/prompt-groups/{group['id']}").status_code == 404
+    assert client.post('/api/prompt-groups', json=payload).status_code == 404
+    del client.app.state.test_user
+    reordered = {**payload, 'template_ids': [first['id'], second['id']]}
+    assert client.put(f"/api/prompt-groups/{group['id']}", json=reordered).json()['template_ids'] == reordered['template_ids']
+    assert client.delete(f"/api/prompt-templates/{first['id']}").status_code == 204
+    assert client.get('/api/prompt-groups').json()['items'][0]['template_ids'] == [second['id']]
+    assert client.delete(f"/api/prompt-groups/{group['id']}").status_code == 204
+    assert client.get(f"/api/prompt-templates/{second['id']}").status_code == 200
+
+
 def test_excel_export_and_import_roundtrip(client):
     category = client.post('/api/prompt-categories', json={'name': '背景', 'visibility': 'public'}).json()
     content = '=保留产品\n调整背景和阴影'

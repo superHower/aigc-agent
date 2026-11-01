@@ -12,9 +12,80 @@ from openpyxl.styles import Alignment, Font
 from backend.db.task_store import utc_now
 from backend.services.access import current_user
 from backend.services.audit import log
+from backend.services.prompt_groups import group_view
 
 router = APIRouter(prefix="/api", tags=["prompt library"])
 EXCEL_HEADERS = ("模板名称", "分类", "提示词内容")
+
+
+class GroupInput(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    template_ids: list[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator('name')
+    @classmethod
+    def non_blank(cls, value):
+        if not value.strip():
+            raise ValueError('名称不能为空')
+        return value.strip()
+
+    @field_validator('template_ids')
+    @classmethod
+    def unique_members(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError('组内模板不能重复')
+        return value
+
+
+@router.get('/prompt-groups')
+def list_groups(request: Request):
+    user = current_user(request)
+    with connection(request) as db:
+        rows = db.execute('SELECT id FROM prompt_groups WHERE owner_id=? ORDER BY updated_at DESC, id', (user['id'],)).fetchall()
+        return {'items': [group_view(db, row['id'], user) for row in rows]}
+
+
+def save_group(payload, request, item_id=None):
+    user = current_user(request)
+    with connection(request) as db:
+        if item_id:
+            group_view(db, item_id, user)
+        for template_id in payload.template_ids:
+            require_row(db, 'prompt_templates', template_id, user)
+        now = utc_now()
+        try:
+            if item_id:
+                db.execute('UPDATE prompt_groups SET name=?,updated_at=? WHERE id=?', (payload.name, now, item_id))
+                db.execute('DELETE FROM prompt_group_members WHERE group_id=?', (item_id,))
+            else:
+                item_id = uuid4().hex
+                db.execute('INSERT INTO prompt_groups (id,owner_id,name,created_at,updated_at) VALUES (?,?,?,?,?)', (item_id, user['id'], payload.name, now, now))
+            for position, template_id in enumerate(payload.template_ids):
+                db.execute('INSERT INTO prompt_group_members (group_id,template_id,position) VALUES (?,?,?)', (item_id, template_id, position))
+            log(db, user['id'], 'prompt_group_save', item_id, payload.model_dump())
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(409, '提示词组名称已存在或模板已变更，请刷新后重试') from exc
+        return group_view(db, item_id, user)
+
+
+@router.post('/prompt-groups', status_code=201)
+def create_group(payload: GroupInput, request: Request):
+    return save_group(payload, request)
+
+
+@router.put('/prompt-groups/{item_id}')
+def update_group(item_id: str, payload: GroupInput, request: Request):
+    return save_group(payload, request, item_id)
+
+
+@router.delete('/prompt-groups/{item_id}', status_code=204)
+def delete_group(item_id: str, request: Request):
+    user = current_user(request)
+    with connection(request) as db:
+        group_view(db, item_id, user)
+        db.execute('DELETE FROM prompt_groups WHERE id=?', (item_id,))
+        log(db, user['id'], 'prompt_group_delete', item_id)
+    return Response(status_code=204)
 
 
 class CategoryInput(BaseModel):

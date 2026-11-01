@@ -50,6 +50,10 @@ export async function cleanupStorage(before: string) { return (await api.post('/
 export type PromptCategory = { id: string; name: string; created_at: string; visibility?: 'private' | 'public'; owner_id?: string }
 export type PromptTemplate = { id: string; name: string; content: string; category_id: string | null; created_at: string; updated_at: string; visibility?: 'private' | 'public'; owner_id?: string }
 export type PromptTemplateInput = Pick<PromptTemplate, 'name' | 'content' | 'category_id' | 'visibility'>
+export type PromptGroup = { id: string; name: string; template_ids: string[] }
+export async function listPromptGroups() { return (await api.get<{ items: PromptGroup[] }>('/prompt-groups')).data.items }
+export async function savePromptGroup(payload: Pick<PromptGroup, 'name' | 'template_ids'>, id?: string) { return (await (id ? api.put<PromptGroup>(`/prompt-groups/${id}`, payload) : api.post<PromptGroup>('/prompt-groups', payload))).data }
+export async function deletePromptGroup(id: string) { await api.delete(`/prompt-groups/${id}`) }
 export async function listPromptCategories() { return (await api.get<{ items: PromptCategory[] }>('/prompt-categories')).data.items }
 export async function savePromptCategory(name: string, id?: string, visibility = 'private') { return (await (id ? api.put<PromptCategory>(`/prompt-categories/${id}`, { name, visibility }) : api.post<PromptCategory>('/prompt-categories', { name, visibility }))).data }
 export async function deletePromptCategory(id: string) { await api.delete(`/prompt-categories/${id}`) }
@@ -70,7 +74,7 @@ export type UploadedFile = { file_id: string; filename: string; url: string; wid
 export type TextBlock = { id: string; bbox: [number, number, number, number]; position: string; original: string; confidence: number | null; mask_url: string }
 export type AnalysisFile = { file_id: string; width: number; height: number; thumbnail_url: string | null; text_blocks: TextBlock[]; logo_blocks: unknown[]; error: string | null }
 export type TaskJob = { source_filename?: string | null; prompt?: string; reference_urls?: string[]; duration_seconds?: number | null; channel_name?: string | null; id: string; task_id: string; source_id: string; step: string; target_id: string | null; status: string; retry_count: number; cancel_requested: boolean; output_url: string | null; output_filename?: string | null; error: string | null; created_at?: string; updated_at?: string }
-export type Task = { credit_summary?: Record<string, number>; auto_retry_count?: number; auto_retry_limit?: number; id: string; status: string; created_at?: string; updated_at?: string; total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; progress: number; estimated_cost?: number; max_concurrency?: number; sources?: { source_id: string; status: string; total_jobs: number; completed_jobs: number }[]; jobs: TaskJob[]; error?: string | null }
+export type Task = { mode?: 'shared' | 'reference' | 'prompt_group' | null; credit_summary?: Record<string, number>; auto_retry_count?: number; auto_retry_limit?: number; id: string; status: string; created_at?: string; updated_at?: string; total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; progress: number; estimated_cost?: number; max_concurrency?: number; sources?: { source_id: string; status: string; total_jobs: number; completed_jobs: number }[]; jobs: TaskJob[]; error?: string | null }
 
 export async function uploadFiles(files: File[]) { const form = new FormData(); files.forEach((file) => form.append('files', file)); return (await api.post<{ files: UploadedFile[] }>('/upload', form)).data }
 export async function analyzeFiles(fileIds: string[]) { return (await api.post<{ files: AnalysisFile[] }>('/analyze', { file_ids: fileIds })).data }

@@ -161,9 +161,11 @@ class BatchRequest(BaseModel):
 class MultiImageRequest(BaseModel):
     model_config = {"extra": "forbid"}
     source_ids: list[str] = Field(min_length=1, max_length=50)
-    mode: Literal["shared", "reference"] = "shared"
+    mode: Literal["shared", "reference", "prompt_group"] = "shared"
+    prompt_group_id: str | None = None
     prompt: str = Field(default="", max_length=32000)
     aspect_ratios: list[Literal["original", "1:1", "3:4", "16:9"]] = Field(default_factory=lambda: ["original"], min_length=1, max_length=4)
+    preserve_natural_proportions: bool = False
     reference_file_id: str | None = None
     reference_component: str = Field(default="", max_length=1000)
     ocr_enabled: bool = False
@@ -246,6 +248,7 @@ class JobView(BaseModel):
 
 
 class TaskView(BaseModel):
+    mode: Literal["shared", "reference", "prompt_group"] | None = None
     credit_summary: dict[str, int] = Field(default_factory=dict)
     auto_retry_count: int = 0
     auto_retry_limit: int = 3

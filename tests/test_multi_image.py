@@ -35,7 +35,26 @@ def test_fifty_images_four_ratios_sorted_and_unique(tmp_path):
     assert len({options["filename"] for options in rule["outputs"].values()}) == 200
     assert rule["outputs"][jobs[0]["id"]]["filename"] == "图1-原比例.png"
     assert rule["outputs"][jobs[4]["id"]]["filename"] == "图2-原比例.png"
-    assert all("禁止拉伸" in job["prompt"] for job in jobs)
+    assert all("禁止拉伸" not in job["prompt"] for job in jobs)
+
+
+@pytest.mark.parametrize("mode", ["shared", "reference"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_natural_proportions_instruction_is_optional(tmp_path, mode, enabled):
+    sources = make_sources(tmp_path, 2)
+    instructions = "按要求重新设计产品布局"
+    payload = MultiImageRequest(
+        source_ids=["src_2"], mode=mode, reference_file_id="src_1" if mode == "reference" else None,
+        prompt=instructions, aspect_ratios=["original", "1:1", "3:4", "16:9"],
+        preserve_natural_proportions=enabled,
+    )
+    _, jobs, _, _ = plan_multi_image(payload, sources, {}, tmp_path)
+    suffix = "必须保持主体、文字和其他内容的自然比例，禁止拉伸、挤压或变形。可调整布局、间距或扩展背景来适配画布，保留完整主体。"
+    for job in jobs:
+        assert instructions in job["prompt"]
+        assert "输出画布比例为" in job["prompt"]
+        assert (suffix in job["prompt"]) is enabled
+        assert job["prompt"].count(suffix) == int(enabled)
 
 
 def test_reference_mode_and_validation(tmp_path):
@@ -92,6 +111,41 @@ def test_fit_output_does_not_stretch(tmp_path):
         assert image.getpixel((50, 25)) == (255, 0, 0)
         assert image.getpixel((50, 74)) == (255, 0, 0)
         assert image.getpixel((50, 75)) == (255, 255, 255)
+
+
+def test_prompt_group_independent_outputs_and_snapshot(tmp_path):
+    sources = make_sources(tmp_path, 1)
+    group = {'id': 'group', 'name': '套图', 'templates': [
+        {'id': 'a', 'name': '白底', 'content': '换成白色背景'},
+        {'id': 'b', 'name': '客厅', 'content': '放在客厅里'},
+    ]}
+    payload = MultiImageRequest(source_ids=['src_1'], mode='prompt_group', prompt_group_id='group')
+    ids, jobs, chains, rule = plan_multi_image(payload, sources, {}, tmp_path, group)
+    assert len(jobs) == 2
+    assert [job['target_id'] for job in jobs] == ['a', 'b']
+    assert '换成白色背景' in jobs[0]['prompt'] and '放在客厅里' not in jobs[0]['prompt']
+    assert '放在客厅里' in jobs[1]['prompt'] and '换成白色背景' not in jobs[1]['prompt']
+    assert all(options['variant'] for options in rule['outputs'].values())
+    assert len({options['filename'] for options in rule['outputs'].values()}) == 2
+    store = TaskStore(tmp_path / 'group.db')
+    store.create_batch('group_task', ids, rule, jobs)
+    editor = ConcurrentEditor(tmp_path)
+    manager = TaskManager(store, editor, tmp_path, 2, 10, 0, max_concurrency=2)
+
+    async def run():
+        await manager.create_batch('group_task', chains, rule)
+        await manager.running_tasks['group_task']
+
+    asyncio.run(run())
+    assert len(editor.calls) == 2
+    assert all(call['input_path'] == Path(sources['src_1']['path']) for call in editor.calls)
+    assert store.get_task('group_task')['status'] == 'completed'
+    import json
+    group['templates'][0]['content'] = '已修改'
+    assert json.loads(store.get_task('group_task')['edit_rule'])['prompt_group']['templates'][0]['content'] == '换成白色背景'
+    for update in [{'source_ids': ['src_1', 'src_2']}, {'aspect_ratios': ['1:1']}, {'ocr_enabled': True}, {'prompt_group_id': None}]:
+        with pytest.raises(ValueError):
+            plan_multi_image(payload.model_copy(update=update), sources, {}, tmp_path, group)
 
 
 class ConcurrentEditor:
@@ -248,6 +302,7 @@ def test_api_without_ocr_and_zip_order(tmp_path, monkeypatch):
     task_id = response.json()["task_id"]
     detail = client.get(f"/api/task/{task_id}").json()
     assert detail["max_concurrency"] == 10
+    assert detail["mode"] == "shared"
     assert detail["jobs"][0]["output_filename"] == "图1-原比例.png"
     assert detail["jobs"][0]["source_filename"] == "图1.png"
     assert all(job["reference_urls"] == [] for job in detail["jobs"])
@@ -263,6 +318,7 @@ def test_api_without_ocr_and_zip_order(tmp_path, monkeypatch):
     })
     assert response.status_code == 200
     reference_detail = client.get(f"/api/task/{response.json()['task_id']}").json()
+    assert reference_detail["mode"] == "reference"
     assert all(job["reference_urls"] == ["/api/files/src_1"] for job in reference_detail["jobs"])
     assert client.get(reference_detail["jobs"][0]["reference_urls"][0]).status_code == 200
     assert {job["source_id"] for job in reference_detail["jobs"]} == {"src_2", "src_3"}
@@ -272,3 +328,15 @@ def test_api_without_ocr_and_zip_order(tmp_path, monkeypatch):
         assert "参考背景，保留产品文字" in job["prompt"]
         assert "第一张输入图是当前待处理图片" in job["prompt"]
         assert "输出画布比例为 40:20" in job["prompt"]
+
+    # Older multi-image tasks have no explicit mode; infer it from saved references.
+    import json
+    for recorded_task, expected in [(detail, "shared"), (reference_detail, "reference")]:
+        saved_rule = json.loads(store.get_task(recorded_task["id"])["edit_rule"])
+        assert saved_rule.pop("mode") == expected
+        with store.transaction() as db:
+            db.execute("UPDATE tasks SET edit_rule=? WHERE id=?", (json.dumps(saved_rule), recorded_task["id"]))
+        assert client.get(f"/api/task/{recorded_task['id']}").json()["mode"] == expected
+    listed = {task["id"]: task["mode"] for task in client.get("/api/tasks").json()["items"]}
+    assert listed[detail["id"]] == "shared"
+    assert listed[reference_detail["id"]] == "reference"

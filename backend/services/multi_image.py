@@ -24,7 +24,27 @@ def safe_stem(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(basename).stem).strip(" .")[:100] or "图片"
 
 
-def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[str, AnalyzeFileResult], data_dir: Path):
+def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[str, AnalyzeFileResult], data_dir: Path, prompt_group: dict | None = None):
+    if payload.mode == 'prompt_group':
+        validate_prompt_group_request(payload)
+        if not prompt_group or not prompt_group.get('templates'):
+            raise ValueError('请选择非空的提示词组')
+        source_id = payload.source_ids[0]
+        jobs = []
+        rule = {'size': 'auto', 'quality': payload.quality, 'output_format': 'png', 'multi_image': True,
+                'mode': 'prompt_group', 'reference_paths': [], 'outputs': {}, 'prompt_group': prompt_group}
+        for index, template in enumerate(prompt_group['templates'], 1):
+            single = payload.model_copy(update={'mode': 'shared', 'prompt': template['content']})
+            _, variants, _, variant_rule = plan_multi_image(single, sources, analyses, data_dir)
+            for job in variants:
+                job['step'] = f'prompt_{index}'
+                job['target_id'] = template['id']
+                options = variant_rule['outputs'][job['id']]
+                options['filename'] = f"{safe_stem(sources[source_id]['original_name'])}-{index:02d}-{safe_stem(template['name'])}.png"
+                options['prompt_template_name'] = template['name']
+                rule['outputs'][job['id']] = options
+            jobs.extend(variants)
+        return [source_id], jobs, {source_id: jobs}, rule
     if payload.mode == "shared" and not payload.prompt.strip():
         raise ValueError("请填写通用提示词")
     if payload.mode == "reference":
@@ -37,7 +57,7 @@ def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[s
         if not payload.prompt.strip() and not payload.reference_component.strip():
             raise ValueError("请填写编辑要求")
     source_ids = sorted(payload.source_ids, key=lambda source_id: natural_key(sources[source_id]["original_name"]))
-    rule = {"size": "auto", "quality": payload.quality, "output_format": "png", "multi_image": True,
+    rule = {"size": "auto", "quality": payload.quality, "output_format": "png", "multi_image": True, "mode": payload.mode,
             "reference_paths": [sources[payload.reference_file_id]["path"]] if payload.mode == "reference" else [], "outputs": {}}
     jobs = []
     source_jobs = {}
@@ -80,7 +100,9 @@ def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[s
                     "用户未提及的部分默认尽量保留；用户明确要求修改的部分按用户要求执行。"
                     f"\n请根据以下用户要求编辑第一张图片：\n{instructions}"
                 )
-            prompt += f"\n输出画布比例为 {width}:{height}。必须保持主体、文字和其他内容的自然比例，禁止拉伸、挤压或变形。可调整布局、间距或扩展背景来适配画布，保留完整主体。"
+            prompt += f"\n输出画布比例为 {width}:{height}。"
+            if payload.preserve_natural_proportions:
+                prompt += "必须保持主体、文字和其他内容的自然比例，禁止拉伸、挤压或变形。可调整布局、间距或扩展背景来适配画布，保留完整主体。"
             job_id = f"multi_{uuid4().hex}"
             base = f"{safe_stem(source['original_name'])}-{RATIO_LABELS[ratio]}"
             filename = f"{base}.png"
@@ -96,6 +118,17 @@ def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[s
         jobs.extend(chain)
         source_jobs[source_id] = chain
     return source_ids, jobs, source_jobs, rule
+
+
+def validate_prompt_group_request(payload: MultiImageRequest):
+    if len(payload.source_ids) != 1:
+        raise ValueError('一图多提示词模式请选择一张图片')
+    if not payload.prompt_group_id:
+        raise ValueError('请选择提示词组')
+    if payload.aspect_ratios != ['original']:
+        raise ValueError('一图多提示词模式每条提示词生成一张原比例图片')
+    if payload.ocr_enabled or payload.reference_file_id or payload.prompt.strip() or payload.per_source_overrides:
+        raise ValueError('一图多提示词模式仅使用所选组内的提示词，不启用参考图或 OCR')
 
 
 def fit_output(path: Path, width: int, height: int) -> None:

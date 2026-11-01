@@ -12,7 +12,7 @@ from uuid import uuid4
 from backend.db.task_store import TaskStore, utc_now
 from backend.services.passwords import hash_password
 
-OWNED = ('files', 'analyses', 'tasks', 'prompt_categories', 'prompt_templates')
+OWNED = ('files', 'analyses', 'tasks', 'prompt_categories', 'prompt_templates', 'prompt_groups')
 
 
 def require_idle(db):
@@ -149,7 +149,7 @@ def import_sqlite(source: Path, target: TaskStore):
         if not original.execute("SELECT 1 FROM sqlite_master WHERE name='schema_migrations'").fetchone():
             raise ValueError('请先对 SQLite 演练副本执行 migrate 和 init-admin')
         versions = [r[0] for r in original.execute('SELECT version FROM schema_migrations ORDER BY version')]
-        tables = ['users', 'sessions', 'system_settings', 'sms_challenges', 'auth_limits', 'captcha_challenges', 'files', 'prompt_categories', 'prompt_templates', 'analyses', 'tasks', 'jobs', 'audit_logs', 'channels', 'channel_metadata']
+        tables = ['users', 'sessions', 'system_settings', 'sms_challenges', 'auth_limits', 'captcha_challenges', 'files', 'prompt_categories', 'prompt_templates', 'prompt_groups', 'prompt_group_members', 'analyses', 'tasks', 'jobs', 'audit_logs', 'channels', 'channel_metadata']
         tables += ['credit_accounts', 'credit_lots', 'trial_claims', 'credit_entries', 'credit_reservations', 'credit_allocations', 'business_requests', 'generation_attempts']
         tables += ['packages', 'membership_entries']
         tables += ['payment_assets', 'payment_codes', 'orders', 'order_evidence', 'payment_receipts', 'order_reviews', 'financial_requests', 'credit_adjustments']
