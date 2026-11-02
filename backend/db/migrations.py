@@ -316,6 +316,16 @@ def migrate(store):
             for key, value in (('risk_daily_limit', '100000'), ('risk_concurrency', '3'), ('risk_retry_limit', '2')):
                 db.execute('INSERT INTO system_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO NOTHING', (key, value))
             stamp(db, 13)
+        if 14 not in applied:
+            db.execute('ALTER TABLE membership_plans ADD COLUMN duration_hours INTEGER NOT NULL DEFAULT 0')
+            db.execute("UPDATE membership_plans SET cost=25 WHERE id='ordinary'")
+            db.execute("UPDATE membership_plans SET credits=24000 WHERE id='quarterly'")
+            db.execute('INSERT INTO membership_plans VALUES (?,?,?,?,?,?,?,?,?)', ('newcomer', '新人 3 天体验卡', 12, 1500, 1200, 0, 0, 0, 72))
+            db.execute('''CREATE TABLE newcomer_claims (
+                user_id TEXT PRIMARY KEY REFERENCES users(id), snapshot TEXT NOT NULL,
+                created_at TEXT NOT NULL, activated_at TEXT
+            )''')
+            stamp(db, 14)
 
 
 def stamp(db, version):

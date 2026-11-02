@@ -9,6 +9,7 @@ export function PhoneAuth({ reset = false }: { reset?: boolean }) {
   const navigate = useNavigate()
   return <main className="auth-page"><Card>
     <Typography.Title level={2}>{reset ? '修改密码' : '注册账号'}</Typography.Title>
+    {!reset && <Typography.Paragraph>注册即赠 500 积分，登录后立即可用。注册 24 小时内可在充值中心领取新人体验卡优惠。</Typography.Paragraph>}
     {reset && <Typography.Paragraph type="secondary">输入邮箱和原密码以修改密码。忘记原密码请联系管理员。</Typography.Paragraph>}
     {error && <Alert type="error" message={error} />}
     <Form layout="vertical" onFinish={async values => {

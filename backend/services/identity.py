@@ -40,8 +40,9 @@ def register_email(store, name, address, password, ip):
         ident = uuid4().hex
         db.execute('INSERT INTO users (id,username,email,password_hash,role,created_at) VALUES (?,?,?,?,?,?)',
                    (ident, name, address, password_hash, 'user', utc_now()))
-        from backend.services.credits import ensure_account
+        from backend.services.credits import ensure_account, grant
         ensure_account(db, ident)
+        grant(db, ident, 500, 'trial', 'registration:' + ident)
     return {'id': ident, 'username': name, 'role': 'user'}
 
 

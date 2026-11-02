@@ -127,7 +127,11 @@ def test_registration_grant_atomic_and_billed_api(identity_app, monkeypatch):
     from backend.main import app
     store, codes, _ = identity_app
     client, user_id = signup(codes, '13800000009', 'credit_user')
-    assert client.get('/api/account/credits').json()['available'] == 0
+    assert client.get('/api/account/credits').json()['available'] == 500
+    # Keep a small balance to exercise rejection when a second generation cannot be funded.
+    with store.transaction() as db:
+        db.execute('UPDATE credit_lots SET available=0 WHERE user_id=?', (user_id,))
+        credits.entry(db, user_id, None, 'adjust', -500, 0, 'test-remove-registration')
     with store.transaction() as db:
         credits.grant(db, user_id, 60, 'paid', 'api-grant')
     source = image_upload(client)
@@ -139,12 +143,12 @@ def test_registration_grant_atomic_and_billed_api(identity_app, monkeypatch):
             store.finalize_task(task_id)
     monkeypatch.setattr(app.state, 'manager', FakeManager(), raising=False)
     payload = {'source_ids': [source], 'prompt': 'test', 'aspect_ratios': ['original', '1:1']}
-    assert client.post('/api/generate/preview', json=payload).json()['required_credits'] == 40
+    assert client.post('/api/generate/preview', json=payload).json()['required_credits'] == 50
     headers = {'Idempotency-Key': 'create-key'}
     response = client.post('/api/generate/multi-image', json=payload, headers=headers)
     assert response.status_code == 200, response.text
     assert client.post('/api/generate/multi-image', json=payload, headers=headers).json()['task_id'] == response.json()['task_id']
-    assert client.get('/api/account/credits').json()['available'] == 20
+    assert client.get('/api/account/credits').json()['available'] == 10
     assert client.post('/api/generate/multi-image', json={**payload, 'prompt': 'changed'}, headers=headers).status_code == 409
     assert client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'new-request'}).status_code == 402
     with store.transaction() as db:
@@ -194,13 +198,13 @@ def test_prompt_group_generation_billing_and_snapshot(identity_app, monkeypatch)
     preview = client.post('/api/generate/preview', json=payload)
     assert preview.status_code == 200
     assert preview.json()['images'] == 2
-    assert preview.json()['required_credits'] == 40
+    assert preview.json()['required_credits'] == 50
     response = client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'group-create'})
     assert response.status_code == 200, response.text
     task_id = response.json()['task_id']
     assert response.json()['total_jobs'] == 2
-    assert response.json()['required_credits'] == 40
-    assert client.get('/api/account/credits').json()['available'] == 20
+    assert response.json()['required_credits'] == 50
+    assert client.get('/api/account/credits').json()['available'] == 510
     assert client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'group-create'}).json()['task_id'] == task_id
     detail = client.get(f'/api/task/{task_id}').json()
     assert detail['mode'] == 'prompt_group'

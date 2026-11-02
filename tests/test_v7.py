@@ -51,7 +51,7 @@ def test_email_auth_and_password_revocation(setup):
     assert anon.post('/api/auth/reset-password', json=reset | {'old_password': 'password-123'}).status_code == 200
     assert user.get('/api/auth/me').status_code == 401
     assert user.post('/api/auth/login', json={'account': 'USER@example.com', 'password': 'new-password-123'}).status_code == 200
-    assert credits.balance(store, ident)['available'] == 0
+    assert credits.balance(store, ident)['available'] == 500
 
 
 def test_manual_recharge_membership_and_service_image(setup):
@@ -62,11 +62,11 @@ def test_manual_recharge_membership_and_service_image(setup):
     assert admin.post(url, json={'amount': 100}, headers=headers).status_code == 200
     assert admin.post(url, json={'amount': 100}, headers=headers).status_code == 200
     assert admin.post(url, json={'amount': 200}, headers=headers).status_code == 409
-    assert credits.balance(store, ident)['available'] == 100
+    assert credits.balance(store, ident)['available'] == 600
     membership = f'/api/admin/users/{ident}/membership'
     assert admin.post(membership, json={'plan_id': 'weekly'}, headers={'Idempotency-Key': 'membership-test-key'}).status_code == 200
     assert admin.post(membership, json={'plan_id': 'weekly'}, headers={'Idempotency-Key': 'membership-test-key'}).status_code == 200
-    assert credits.balance(store, ident)['available'] == 4100
+    assert credits.balance(store, ident)['available'] == 4600
     result = admin.get('/api/admin/users', params={'email': 'USER@example.com'}).json()
     assert result['total'] == 1 and result['items'][0]['id'] == ident
     image = io.BytesIO(); Image.new('RGB', (50, 50)).save(image, 'PNG')
@@ -85,8 +85,8 @@ def test_multilot_freeze_release_and_member_expiry(setup):
         credits.grant(db, 'user', 10, 'paid', 'first')
         credits.grant(db, 'user', 100, 'paid', 'second')
     create(store, 'ordinary', 1)
-    assert task_credit_summary(store, 'ordinary') == {'frozen': 20}
-    assert credits.balance(store, 'user')['available'] == 90
+    assert task_credit_summary(store, 'ordinary') == {'frozen': 25}
+    assert credits.balance(store, 'user')['available'] == 85
     store.update_job('ordinary_0', status='failed')
     store.finalize_task('ordinary')
     assert credits.balance(store, 'user')['available'] == 110
@@ -118,14 +118,14 @@ def test_quarterly_periods_quota_and_snapshot(setup):
         db.execute("UPDATE membership_plans SET cost=99 WHERE id='quarterly'")
         assert subscriptions.pricing(db, 'user', 1)[0] == 8
         assert subscriptions.pricing(db, 'user', 2001)[0] == 8
-    assert credits.balance(store, 'user')['available'] == 48000
+    assert credits.balance(store, 'user')['available'] == 24000
 
 
 def test_concurrent_reservations_idempotency_and_retries(setup):
     store, _, _, _ = setup
     with store.transaction() as db:
         credits.begin(db)
-        credits.grant(db, 'user', 40, 'paid', 'concurrent')
+        credits.grant(db, 'user', 50, 'paid', 'concurrent')
     def submit(name):
         try:
             return create(store, name, 2)
@@ -140,14 +140,14 @@ def test_concurrent_reservations_idempotency_and_retries(setup):
     store.update_job(task_id + '_0', status='done', output_path='unused')
     store.update_job(task_id + '_1', status='failed')
     store.finalize_task(task_id)
-    assert credits.balance(store, 'user')['available'] == 20
+    assert credits.balance(store, 'user')['available'] == 25
     assert credits.retry(store, 'user', task_id, None, 'retry-key')
     assert not credits.retry(store, 'user', task_id, None, 'retry-key')
-    assert credits.balance(store, 'user')['frozen'] == 20
+    assert credits.balance(store, 'user')['frozen'] == 25
     store.request_cancel(task_id)
     store.update_job(task_id + '_1', status='cancelled')
     store.finalize_task(task_id)
-    assert credits.balance(store, 'user')['available'] == 20
+    assert credits.balance(store, 'user')['available'] == 25
     assert not credits.audit_balances(store)
 
 
@@ -162,8 +162,8 @@ def test_period_rollover_and_switch_preserve_general_credits(setup, monkeypatch)
     now = (datetime.fromisoformat(periods[0]['starts_at']) + timedelta(days=32)).isoformat()
     monkeypatch.setattr(subscriptions, 'utc_now', lambda: now)
     monkeypatch.setattr(credits, 'utc_now', lambda: now)
-    assert credits.balance(store, 'user')['available'] == 48100
-    assert credits.balance(store, 'user')['available'] == 48100
+    assert credits.balance(store, 'user')['available'] == 24100
+    assert credits.balance(store, 'user')['available'] == 24100
     with store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM credit_lots WHERE source='membership'").fetchone()[0] == 1
         credits.begin(db)

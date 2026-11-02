@@ -39,6 +39,9 @@ def assign(db, user_id, plan_id):
     if not plan:
         raise HTTPException(404, '套餐不存在')
     now = datetime.now(timezone.utc)
+    if plan_id == 'newcomer':
+        from backend.services.newcomer import activate
+        plan = activate(db, user_id)
     # A change replaces the previous membership and invalidates its unused benefits.
     db.execute('UPDATE subscriptions SET cancelled_at=? WHERE user_id=? AND cancelled_at IS NULL', (now.isoformat(), user_id))
     db.execute("UPDATE credit_lots SET expires_at=? WHERE user_id=? AND source='membership' AND (expires_at>? OR expires_at IS NULL)", (now.isoformat(), user_id, now.isoformat()))
@@ -47,7 +50,7 @@ def assign(db, user_id, plan_id):
         db.execute('UPDATE users SET membership_expires_at=NULL WHERE id=?', (user_id,))
         return None
     count = 3 if plan_id == 'quarterly' else 1
-    end = now + timedelta(days=7) if plan_id == 'weekly' else add_months(now, count)
+    end = now + timedelta(hours=plan['duration_hours']) if plan['duration_hours'] else (now + timedelta(days=7) if plan_id == 'weekly' else add_months(now, count))
     ident = uuid4().hex
     db.execute('INSERT INTO subscriptions VALUES (?,?,?,?,?,?,NULL,?)', (ident, user_id, plan_id, json.dumps(dict(plan)), now.isoformat(), end.isoformat(), now.isoformat()))
     # Membership benefits are granted in full immediately and expire with the membership.

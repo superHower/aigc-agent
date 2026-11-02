@@ -205,6 +205,18 @@ body {
 .plan-details dd { margin: 0; font-weight: 600; }
 .plan-details dd span { font-weight: 400; }
 .plan-refund-note.ant-typography { margin: 20px 0 0; }
+.recharge-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 28px; align-items: stretch; }
+.recharge-topup-callout { display: flex; align-items: baseline; gap: 16px; margin: 24px 0; padding: 18px 20px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent-soft); }
+.recharge-topup-callout strong { color: var(--accent); font-size: 28px; }
+.recharge-service { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; border-left: 1px solid var(--border); text-align: center; }
+.recharge-service h4.ant-typography { margin-top: 0; }
+.recharge-service img { display: block; width: 210px; height: 210px; max-width: 100%; object-fit: cover; border-radius: 8px; background: var(--surface-raised); }
+.plan-output dd { color: var(--accent); font-size: 20px; }
+.plan-output dd span { color: var(--accent); font-size: 13px; }
+@media (max-width: 720px) { .recharge-layout { grid-template-columns: 1fr; } .recharge-service { border-top: 1px solid var(--border); border-left: 0; } }
+.newcomer-offer.ant-card { border-color: var(--accent); background: linear-gradient(120deg, var(--accent-soft), var(--surface)); }
+.newcomer-offer .ant-statistic, .newcomer-modal .ant-statistic { margin-bottom: 16px; }
+.newcomer-contact { margin-top: 20px; }
 .file-tabs {
   margin: 16px 0;
 }
