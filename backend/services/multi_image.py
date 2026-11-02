@@ -25,6 +25,29 @@ def safe_stem(name: str) -> str:
 
 
 def plan_multi_image(payload: MultiImageRequest, sources: dict, analyses: dict[str, AnalyzeFileResult], data_dir: Path, prompt_group: dict | None = None):
+    if payload.generation_kind == 'video':
+        validate_prompt_group_request(payload)
+        if not prompt_group or not prompt_group.get('templates'):
+            raise ValueError('请选择非空的提示词组')
+        from backend.services.video import image_data
+        source_id = payload.source_ids[0]
+        paths = [sources[source_id]['path']]
+        for path in paths:
+            image_data(Path(path))
+        rule = {'generation_kind': 'video', 'mode': 'prompt_group', 'multi_image': True,
+                'prompt_group': prompt_group, 'outputs': {}, 'video': {
+                    'resolution': payload.video_resolution, 'ratio': payload.video_aspect_ratio,
+                    'duration': payload.video_duration, 'mode': payload.video_mode, 'paths': paths}}
+        jobs = []
+        for index, template in enumerate(prompt_group['templates'], 1):
+            job_id = f'video_{uuid4().hex}'
+            prompt = template['content'].strip()
+            if len(prompt) > 32000:
+                raise ValueError('组内提示词不能超过 32000 字符')
+            jobs.append({'id': job_id, 'source_id': source_id, 'step': f'prompt_{index}',
+                         'target_id': template['id'], 'prompt': prompt, 'input_path': paths[0], 'mask_path': ''})
+            rule['outputs'][job_id] = {'variant': True, 'filename': f"{safe_stem(sources[source_id]['original_name'])}-{index:02d}-{safe_stem(template['name'])}.mp4"}
+        return [source_id], jobs, {source_id: jobs}, rule
     if payload.mode == 'prompt_group':
         validate_prompt_group_request(payload)
         if not prompt_group or not prompt_group.get('templates'):

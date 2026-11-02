@@ -40,15 +40,15 @@ export function TaskDetail() {
       </Row>
     </Card>
     <Card title="结果与步骤对比">
-      <Button href={`/api/task/${id}/download`} disabled={!current.completed_jobs}>下载已生成图片 ZIP</Button>
+      <Button href={`/api/task/${id}/download`} disabled={!current.completed_jobs}>下载已生成结果 ZIP</Button>
       <Table rowKey="id" dataSource={current.jobs} pagination={false} scroll={{ x: 1100 }} columns={[
         { title: '文件名', dataIndex: 'source_filename', width: 180, render: (filename?: string | null) => <Typography.Text style={{ overflowWrap: 'anywhere' }}>{filename || '—'}</Typography.Text> },
         { title: '用时', dataIndex: 'duration_seconds', width: 120, render: (seconds?: number | null) => seconds == null ? '—' : seconds < 60 ? `${seconds.toFixed(1)} 秒` : `${Math.floor(seconds / 60)} 分 ${(seconds % 60).toFixed(1)} 秒` },
         // { title: '步骤', dataIndex: 'step' }, 
         { title: '渠道', dataIndex: 'channel_name' }, { title: '状态', dataIndex: 'status', render: (status: string) => <Tag color={colors[status]}>{status}</Tag> }, { title: '重试次数', dataIndex: 'retry_count' },
         { title: '原待处理图', render: (_: unknown, job: typeof current.jobs[number]) => <Image width={96} src={`/api/files/${job.source_id}`} alt="原待处理图" /> },
-        { title: '结果', render: (_: unknown, job: typeof current.jobs[number]) => job.output_url ? <Image width={96} src={job.output_url} alt="生成结果" /> : '—' },
-        { title: '操作', render: (_: unknown, job: typeof current.jobs[number]) => <Space wrap><Button size="small" href={job.output_url ?? undefined} download={job.output_filename ?? `${job.id}.png`} disabled={!job.output_url}>下载图片</Button>{job.status === 'done' ? <RefineImageButton job={job} disabled={active} onSubmitted={refresh} /> : <Button size="small" disabled={!['failed','cancelled'].includes(job.status) || active} onClick={() => void retry(job.id)}>重试</Button>}</Space> },
+        { title: '结果', render: (_: unknown, job: typeof current.jobs[number]) => job.output_url ? job.media_type === 'video' ? <video controls preload="metadata" width={200} src={job.output_url} /> : <Image width={96} src={job.output_url} alt="生成结果" /> : '—' },
+        { title: '操作', render: (_: unknown, job: typeof current.jobs[number]) => <Space wrap><Button size="small" href={job.output_url ?? undefined} download={job.output_filename ?? `${job.id}.png`} disabled={!job.output_url}>{job.media_type === 'video' ? '下载视频' : '下载图片'}</Button>{job.status === 'done' ? job.media_type === 'video' ? null : <RefineImageButton job={job} disabled={active} onSubmitted={refresh} /> : <Button size="small" disabled={!['failed','cancelled'].includes(job.status) || active} onClick={() => void retry(job.id)}>重试</Button>}</Space> },
       ]} />
       <Typography.Text type="secondary">用时为累计处理时间，包含重试，不含排队；历史记录无执行时间时显示“—”。</Typography.Text>
     </Card>

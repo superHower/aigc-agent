@@ -66,6 +66,20 @@ class FakeEditor:
             self.active -= 1
 
 
+def test_channel_types_default_and_routing(tmp_path):
+    store = TaskStore(tmp_path / 'typed.db')
+    channels = ChannelStore(store)
+    payload = dict(name='图片', model='image', base_url='https://example.com/v1', api_key='secret')
+    image = channels.save(ChannelInput(**payload))
+    video = channels.save(ChannelInput(**{**payload, 'name': '视频', 'model': 'minimax-h3', 'channel_type': 'video'}))
+    assert image['channel_type'] == 'image'
+    assert video['channel_type'] == 'video'
+    assert [row['id'] for row in channels.available()] == [image['id']]
+    assert [row['id'] for row in channels.available(channel_type='video')] == [video['id']]
+    with pytest.raises(ValueError):
+        ChannelInput(**{**payload, 'channel_type': 'unknown'})
+
+
 def make_pool(tmp_path, count=4, fail=False, concurrency=3):
     store = TaskStore(tmp_path / 'tasks.db')
     channels = ChannelStore(store)

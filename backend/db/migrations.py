@@ -245,6 +245,17 @@ def migrate(store):
                 );
             ''')
             stamp(db, 9)
+        if 10 not in applied:
+            if columns(db, 'channels') and 'channel_type' not in columns(db, 'channels'):
+                db.execute("ALTER TABLE channels ADD COLUMN channel_type TEXT NOT NULL DEFAULT 'image'")
+            stamp(db, 10)
+        if 11 not in applied:
+            db.execute('''CREATE TABLE video_jobs (
+                job_id TEXT PRIMARY KEY REFERENCES jobs(id), channel_id TEXT NOT NULL,
+                base_url TEXT NOT NULL, key_hash TEXT NOT NULL,
+                upstream_id TEXT, state TEXT NOT NULL
+            )''')
+            stamp(db, 11)
 
 
 def stamp(db, version):

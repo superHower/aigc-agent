@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from openai import AsyncOpenAI
 from httpx import TransportError
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.db.task_store import TaskStore, utc_now
 from backend.services.image_editor import ImageEditor
@@ -18,6 +18,7 @@ class ChannelInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     name: str = Field(min_length=1, max_length=100)
     model: str = Field(min_length=1, max_length=200)
+    channel_type: str = Field(default='image')
     base_url: str = Field(min_length=1, max_length=2000)
     api_key: str = Field(default="", max_length=2000)
     remark: str = Field(default="", max_length=2000)
@@ -26,10 +27,23 @@ class ChannelInput(BaseModel):
     enabled: bool = True
     estimated_cost_cents: int | None = Field(default=None, strict=True, ge=0, le=1000000)
 
+    @model_validator(mode='after')
+    def video_model(self):
+        if self.channel_type == 'video' and self.model != 'minimax-h3':
+            raise ValueError('视频渠道仅支持 minimax-h3')
+        return self
+
     @field_validator("name", "model", "base_url", "api_key", "remark")
     @classmethod
     def trim(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator('channel_type')
+    @classmethod
+    def validate_channel_type(cls, value):
+        if value not in ('image', 'video'):
+            raise ValueError('渠道类型必须是图片或视频')
+        return value
 
     @field_validator("base_url")
     @classmethod
@@ -62,13 +76,15 @@ class ChannelStore:
             from backend.db.migrations import columns
             if 'estimated_cost_cents' not in columns(connection, 'channels'):
                 connection.execute('ALTER TABLE channels ADD COLUMN estimated_cost_cents INTEGER')
+            if 'channel_type' not in columns(connection, 'channels'):
+                connection.execute("ALTER TABLE channels ADD COLUMN channel_type TEXT NOT NULL DEFAULT 'image'")
 
     def seed(self, settings) -> None:
         with self.store._connect() as connection:
             if connection.execute("SELECT 1 FROM channel_metadata WHERE key = 'seeded'").fetchone():
                 return
             if settings.openai_api_key and settings.openai_base_url and not self.list():
-                self.save(ChannelInput(name="默认渠道", model=settings.model_edit,
+                self.save(ChannelInput(name="默认渠道", model=settings.model_edit, channel_type='image',
                                        base_url=settings.openai_base_url, api_key=settings.openai_api_key,
                                        concurrency=3))
             connection.execute("INSERT INTO channel_metadata VALUES ('seeded') ON CONFLICT (key) DO NOTHING")
@@ -98,7 +114,7 @@ class ChannelStore:
             if actor_id:
                 from backend.services.audit import log
                 # Never include keys, request addresses or upstream payloads in audit summaries.
-                log(connection, actor_id, 'channel_save', row['id'], {k: row[k] for k in ('name', 'model', 'concurrency', 'timeout', 'enabled', 'estimated_cost_cents')})
+                log(connection, actor_id, 'channel_save', row['id'], {k: row[k] for k in ('name', 'model', 'channel_type', 'concurrency', 'timeout', 'enabled', 'estimated_cost_cents')})
         return self.public(row)
 
     def delete(self, channel_id: str, actor_id=None) -> None:
@@ -117,12 +133,12 @@ class ChannelStore:
                 from backend.services.audit import log
                 log(connection, actor_id, 'channel_reset', channel_id)
 
-    def available(self, task_id: str | None = None) -> list[dict]:
+    def available(self, task_id: str | None = None, channel_type: str = 'image') -> list[dict]:
         excluded = set()
         if task_id:
             with self.store._connect() as connection:
                 excluded = {row['channel_id'] for row in connection.execute('SELECT channel_id FROM task_channel_failures WHERE task_id=?', (task_id,))}
-        return [row for row in self.list() if row["enabled"] and not row["last_error"] and row['id'] not in excluded]
+        return [row for row in self.list() if row.get('channel_type', 'image') == channel_type and row["enabled"] and not row["last_error"] and row['id'] not in excluded]
 
 
 class FixedModel:

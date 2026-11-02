@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MaskRect(BaseModel):
@@ -171,6 +171,23 @@ class MultiImageRequest(BaseModel):
     ocr_enabled: bool = False
     per_source_overrides: dict[str, SourceOverrides] = Field(default_factory=dict)
     quality: Literal["low", "medium", "high", "xhigh", "max", "auto"] = "high"
+    generation_kind: Literal['image', 'video'] = 'image'
+    video_resolution: Literal['768p', '1080p', '2k'] = '768p'
+    video_aspect_ratio: Literal['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'] = '16:9'
+    video_mode: Literal['first_last_frame', 'omni_reference'] = 'omni_reference'
+    video_duration: int = Field(default=5, ge=4, le=15, strict=True)
+
+    @model_validator(mode='after')
+    def validate_video(self):
+        if self.generation_kind != 'video':
+            return self
+        if self.mode != 'prompt_group':
+            raise ValueError('视频生成请选择一图多提示词模式')
+        if self.video_mode == 'first_last_frame' and self.video_resolution != '768p':
+            raise ValueError('首尾帧模式仅支持 768P')
+        if self.video_resolution != '768p' and self.video_aspect_ratio not in ('16:9', '9:16'):
+            raise ValueError('1080P 和 2K 仅支持 16:9、9:16')
+        return self
 
     @field_validator("source_ids", "aspect_ratios")
     @classmethod
@@ -225,6 +242,7 @@ class RefineRequest(BaseModel):
 
 
 class JobView(BaseModel):
+    media_type: Literal['image', 'video'] = 'image'
     source_filename: str | None = None
     prompt: str = ""
     reference_urls: list[str] = Field(default_factory=list)
@@ -248,6 +266,7 @@ class JobView(BaseModel):
 
 
 class TaskView(BaseModel):
+    media_type: Literal['image', 'video'] = 'image'
     mode: Literal["shared", "reference", "prompt_group"] | None = None
     credit_summary: dict[str, int] = Field(default_factory=dict)
     auto_retry_count: int = 0

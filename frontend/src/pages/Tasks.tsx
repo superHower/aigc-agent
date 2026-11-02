@@ -38,13 +38,13 @@ export function Tasks() {
                 {firstJob ? <Image preview={false} src={`/api/files/${firstJob.source_id}`} alt={firstJob.source_filename ?? '原待图'} /> : <div className="task-history-placeholder">暂无原图</div>}
               </div>
               <div className="task-history-image">
-                <span className="task-history-image-label">结果图</span>
-                {firstJob?.output_url ? <Image preview={false} src={firstJob.output_url} alt="第一个步骤的结果图" /> : <div className="task-history-placeholder">{['failed', 'partial_failed'].includes(task.status) ? '暂无结果' : task.status === 'cancelled' ? '已取消' : '等待生成'}</div>}
+                <span className="task-history-image-label">生成结果</span>
+                {firstJob?.output_url ? firstJob.media_type === 'video' ? <video muted preload="metadata" src={firstJob.output_url} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <Image preview={false} src={firstJob.output_url} alt="第一个步骤的结果图" /> : <div className="task-history-placeholder">{['failed', 'partial_failed'].includes(task.status) ? '暂无结果' : task.status === 'cancelled' ? '已取消' : '等待生成'}</div>}
               </div>
           </Link>
           <div className="task-history-footer">
             <dl className="task-history-meta">
-              <div><dt>模式</dt><dd><Tag>{task.mode === 'reference' ? '参考图组合模式' : task.mode === 'shared' ? '多图共用提示词模式' : task.mode === 'prompt_group' ? '一图多提示词模式' : '其他模式'}</Tag></dd></div>
+              <div><dt>模式</dt><dd><Tag>{task.media_type === 'video' ? '\u89c6\u9891 / ' : ''}{task.mode === 'reference' ? '参考图组合模式' : task.mode === 'shared' ? '多图共用提示词模式' : task.mode === 'prompt_group' ? '一图多提示词模式' : '其他模式'}</Tag></dd></div>
               <div><dt>状态</dt><dd><Tag color={colors[task.status]}>{task.status}</Tag></dd></div>
               <div className="task-history-progress"><dt>进度</dt><dd>{task.completed_jobs}/{task.total_jobs}</dd></div>
               <div className="task-history-updated"><dt>更新时间</dt><dd>{task.updated_at ? <time dateTime={task.updated_at}>{new Date(task.updated_at).toLocaleString()}</time> : '—'}</dd></div>

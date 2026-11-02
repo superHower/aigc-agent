@@ -255,6 +255,7 @@ class TaskStore:
 
     def recover_processing(self) -> None:
         with self._connect() as connection:
+            connection.execute("UPDATE jobs SET status='pending' WHERE status='processing' AND cancel_requested=0 AND id IN (SELECT job_id FROM video_jobs)")
             connection.execute(
                 "UPDATE jobs SET status = 'failed', error = 'process_restarted', updated_at = ? WHERE status = 'processing' AND cancel_requested = 0",
                 (utc_now(),),

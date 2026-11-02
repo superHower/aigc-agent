@@ -6,6 +6,7 @@ import {
   Checkbox,
   Popconfirm,
   Input,
+  InputNumber,
   Layout,
   Progress,
   Select,
@@ -108,6 +109,10 @@ export function Workspace() {
     else setPrompt(update)
   }
   const [quality, setQuality] = useState('high')
+  const [videoResolution, setVideoResolution] = useState<string>()
+  const [videoRatio, setVideoRatio] = useState<string>()
+  const [videoMode, setVideoMode] = useState<string>()
+  const [videoDuration, setVideoDuration] = useState(5)
   const [rightsConfirmed, setRightsConfirmed] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -170,7 +175,7 @@ export function Workspace() {
 
   const makeUploadProps = (role: 'source' | 'reference'): UploadProps => {
     const existing = role === 'reference' ? referenceFiles : files
-    const limit = role === 'reference' || mode === 'prompt_group' ? 1 : 50
+    const limit = role !== 'source' || mode === 'prompt_group' ? 1 : 50
     const save = role === 'reference' ? setReferenceFiles : setFiles
     return {
       multiple: limit > 1,
@@ -202,7 +207,11 @@ export function Workspace() {
     }
   }
 
-  const generate = async () => {
+  const generate = async (kind: 'image' | 'video' = 'image') => {
+    if (kind === 'video' && (!videoResolution || !videoRatio || !videoMode)) {
+      message.warning('请先选择视频清晰度、比例和生成模式')
+      return
+    }
     if (!rightsConfirmed) {
       message.warning('请确认拥有素材使用权')
       return
@@ -237,6 +246,8 @@ export function Workspace() {
     setSubmitting(true)
     try {
       const payload = {
+        generation_kind: kind,
+        ...(kind === 'video' ? { video_resolution: videoResolution, video_aspect_ratio: videoRatio, video_mode: videoMode, video_duration: videoDuration } : {}),
         source_ids: sourceIds,
         mode,
         prompt: mode === 'prompt_group' ? '' : mode === 'reference' ? referencePrompt : prompt,
@@ -407,6 +418,16 @@ export function Workspace() {
               </Card>
             )}
             <Card className="panel-card">
+              {mode === 'prompt_group' && <Space direction="vertical" className="page-stack" style={{ marginBottom: 20 }}>
+                <Typography.Title level={5}>批量生视频设置</Typography.Title>
+                <Alert type="info" message="使用上方上传的一张图片及所选提示词组，每条提示词生成一个视频。首尾帧模式将该图片作为首帧，仅支持 768P；1080P、2K 仅支持 16:9、9:16。取消只停止本地等待，上游可能继续生成并收费。" />
+                <Space wrap>
+                  <Select aria-label="视频清晰度" placeholder="选择清晰度" value={videoResolution} onChange={value => { setVideoResolution(value); if (value !== '768p' && videoRatio && !['16:9', '9:16'].includes(videoRatio)) setVideoRatio(undefined) }} style={{ width: 160 }} options={['768p', '1080p', '2k'].map(value => ({ value, label: value.toUpperCase(), disabled: videoMode === 'first_last_frame' && value !== '768p' }))} />
+                  <Select aria-label="视频比例" placeholder="选择比例" value={videoRatio} onChange={setVideoRatio} style={{ width: 160 }} options={(videoResolution && videoResolution !== '768p' ? ['16:9', '9:16'] : ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).map(value => ({ value, label: value }))} />
+                  <Select aria-label="视频生成模式" placeholder="选择视频模式" value={videoMode} onChange={value => { setVideoMode(value); if (value === 'first_last_frame') setVideoResolution('768p') }} style={{ width: 190 }} options={[{ value: 'first_last_frame', label: '首尾帧模式' }, { value: 'omni_reference', label: '全能参考模式' }]} />
+                  <Space>时长（秒）<InputNumber aria-label="视频时长" min={4} max={15} precision={0} value={videoDuration} onChange={value => setVideoDuration(value ?? 5)} /></Space>
+                </Space>
+              </Space>}
               <Space wrap>
                 <Checkbox
                   checked={rightsConfirmed}
@@ -421,8 +442,9 @@ export function Workspace() {
                   disabled={!files.length || (mode === 'prompt_group' && (!imageCount || groupsLoading || library.loading || !!groupError || !!library.error || groupTemplates.some(template => !template))) || uploading || analyzing || submitting || (!!task && !terminalStatuses.includes(task.status)) || (!isAdmin && (available === null || available < imageCount))}
                   onClick={() => void generate()}
                 >
-                  提交批量任务
+                  {mode === 'prompt_group' ? '提交批量生图任务' : '提交批量任务'}
                 </Button>
+                {mode === 'prompt_group' && <Button loading={submitting} disabled={!files.length || !imageCount || uploading || analyzing || submitting || groupsLoading || library.loading || !!groupError || !!library.error || groupTemplates.some(template => !template) || !videoResolution || !videoRatio || !videoMode} onClick={() => void generate('video')}>提交批量生视频</Button>}
                 <Link to="/tasks">查看所有并行任务</Link>
               </Space>
             </Card>

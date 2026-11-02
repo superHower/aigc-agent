@@ -429,6 +429,8 @@ async def generate_batch(payload: BatchRequest, request: Request):
 @app.post("/api/generate/multi-image")
 async def generate_multi_image(payload: MultiImageRequest, request: Request):
     current = state(request)
+    if payload.generation_kind == 'video' and not current.channels.available(channel_type='video'):
+        raise HTTPException(422, '请先配置可用的 MiniMax H3 视频渠道')
     user = current_user(request)
     key = credits.require_key(request) if user['role'] != 'admin' else request.headers.get('Idempotency-Key')
     prompt_group = resolve_generation_group(payload, request)
@@ -604,6 +606,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
         )
         views.append(
             JobView(
+                media_type=rule.get('generation_kind', 'image'),
                 source_filename=source_files[job["source_id"]]["original_name"] if job["source_id"] in source_files else None,
                 prompt=job["prompt"],
                 reference_urls=[] if rule.get("outputs", {}).get(job["id"], {}).get("refinement") else reference_urls,
@@ -623,7 +626,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
             view.input_path = ''
             view.output_path = ''
             if view.error:
-                view.error = '图片处理未完成；未额外扣除积分，请稍后重试'
+                view.error = '视频未完成，请重试查询原任务；提交结果不明确时需联系管理员核对' if rule.get('generation_kind') == 'video' else '图片处理未完成；未额外扣除积分，请稍后重试'
     terminal_jobs = sum(job.status in {"done", "failed", "cancelled"} for job in views)
     sources = []
     for source_id in sorted({job.source_id for job in views}):
@@ -635,6 +638,7 @@ def task_view(request: Request, task_id: str) -> TaskView:
             "completed_jobs": sum(job.status == "done" for job in source_jobs),
         })
     return TaskView(
+        media_type=rule.get('generation_kind', 'image'),
         mode=rule.get("mode") if rule.get("mode") in {"shared", "reference", "prompt_group"} else (
             ("reference" if reference_paths else "shared") if rule.get("multi_image") else None
         ),
@@ -699,7 +703,7 @@ async def download_task(task_id: str, request: Request):
                 for job in jobs:
                     filename = outputs.get(job["id"], {}).get("filename", f"{job['id']}.png")
                     if filename in used_names:
-                        filename = f"{safe_stem(filename)}-{job['id']}.png"
+                        filename = f"{safe_stem(filename)}-{job['id']}{Path(filename).suffix}"
                     used_names.add(filename)
                     archive.write(job["output_path"], arcname=filename)
             return archive_path
@@ -737,6 +741,8 @@ async def refine_image(task_id: str, job_id: str, payload: RefineRequest, reques
     from backend.services.refinement import prepare
     current = state(request)
     require_task(request, task_id)
+    if json.loads(current.store.get_task(task_id)['edit_rule']).get('generation_kind') == 'video':
+        raise HTTPException(422, '视频结果不支持图片优化')
     if not payload.prompt.strip():
         raise HTTPException(422, '请填写优化提示词')
     created = prepare(current.store, task_id, job_id, payload.prompt.strip(), credits.require_key(request), current.settings.data_dir)

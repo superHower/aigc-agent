@@ -41,6 +41,8 @@ class TaskManager:
         self.channel_pool = channel_pool
         self.assignments: dict[str, dict] = {}
         self.admission = Admission(store, ordinary_concurrency, member_concurrency)
+        from backend.services.video import VideoRunner
+        self.video_runner = VideoRunner(self)
 
     async def create_single_job(
         self,
@@ -237,6 +239,10 @@ class TaskManager:
             source_jobs = {source: jobs for source, jobs in source_jobs.items() if jobs}
         self.store.set_task_status(task_id, "running")
         try:
+            if rule.get('generation_kind') == 'video':
+                await self.video_runner.run(task_id, source_jobs, rule)
+                self.store.finalize_task(task_id)
+                return
             while True:
                 await self._run_batch_round(task_id, source_jobs, rule)
                 if not self.channel_pool or not self.channel_pool.store.available(task_id):
