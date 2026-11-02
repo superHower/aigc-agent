@@ -53,7 +53,11 @@ def login(payload: Login, request: Request, response: Response):
         raise HTTPException(429, '尝试过多，请稍后重试')
     with store.transaction() as db:
         identity.auth_transaction(db)
-        user = db.execute('SELECT * FROM users WHERE email=?', (payload.account.strip().lower(),)).fetchone()
+        login_account = payload.account.strip().lower()
+        if '@' in login_account:
+            user = db.execute('SELECT * FROM users WHERE email=?', (login_account,)).fetchone()
+        else:
+            user = db.execute("SELECT * FROM users WHERE username=? AND role='admin'", (login_account,)).fetchone()
         valid = verify_password(payload.password, user['password_hash'] if user else DUMMY_HASH)
         if not user or user['disabled'] or not valid:
             raise HTTPException(401, '账号或密码错误')

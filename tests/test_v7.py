@@ -40,6 +40,7 @@ def setup(tmp_path, monkeypatch):
 def test_email_auth_and_password_revocation(setup):
     store, admin, user, ident = setup
     anon = TestClient(app)
+    assert anon.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200
     assert anon.post('/api/auth/login', json={'account': 'tester', 'password': 'password-123'}).status_code == 401
     payload = {'username': 'another', 'email': 'USER@example.com', 'password': 'password-123', 'confirm': 'password-123'}
     assert anon.post('/api/auth/register', json=payload).status_code == 409

@@ -19,7 +19,7 @@ export function Login() {
         catch (reason) { setError(promptError(reason)) }
         finally { setBusy(false) }
       }}>
-        <Form.Item name="account" label="邮箱" rules={[{ required: true }, { type: 'email' }]}><Input autoComplete="email" maxLength={254} /></Form.Item>
+        <Form.Item name="account" label="邮箱" rules={[{ required: true, whitespace: true }, { validator: async (_, value: string) => { if (!value || value.trim().toLowerCase() === 'admin') return; if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) throw new Error('请输入有效的邮箱地址') } }]}><Input autoComplete="username" placeholder="请输入邮箱" maxLength={254} /></Form.Item>
         <Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
         <Button block type="primary" htmlType="submit" loading={busy}>登录</Button>
       </Form>
