@@ -46,32 +46,6 @@ def test_concurrent_renewal_and_idempotency(ledger):
     assert 6.99 < (renewed-datetime.now(timezone.utc)).total_seconds()/86400 <= 7
 
 
-def test_packages_permissions_validation_audit(identity_app):
-    store, codes, _ = identity_app
-    anonymous = TestClient(app)
-    assert anonymous.get('/api/packages').json() == {'items': []}
-    user, _ = signup(codes, '13800000009', 'package_user')
-    assert user.get('/api/admin/packages').status_code == 403
-    admin = TestClient(app)
-    assert admin.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200
-    admin.headers['X-CSRF-Token'] = admin.cookies['csrf']
-    items = admin.get('/api/admin/packages').json()['items']
-    assert len(items) == 4 and all(p['status'] == 'draft' for p in items)
-    original = items[0]
-    fields = ('name', 'kind', 'price_cents', 'credits', 'membership_days', 'status', 'sort_order')
-    payload = {k: original[k] for k in fields} | {'status': 'active'}
-    endpoint = '/api/admin/packages/'+original['id']
-    assert admin.put(endpoint, json=payload | {'price_cents': 1.5}).status_code == 422
-    assert admin.put(endpoint, json=payload | {'membership_days': 7}).status_code == 422
-    assert admin.put(endpoint, json=payload).status_code == 200
-    assert anonymous.get('/api/packages').json()['items'][0]['price_cents'] == original['price_cents']
-    assert user.get('/api/account/membership').json() == {'active': False, 'expires_at': None, 'concurrency': 1}
-    assert admin.put(endpoint, json=payload | {'status': 'inactive'}).status_code == 200
-    assert not anonymous.get('/api/packages').json()['items']
-    with store.transaction() as db:
-        assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='package_save'").fetchone()[0] == 2
-
-
 def test_admission_joint_capacity_fairness_and_expiry(ledger):
     async def scenario():
         scheduler = Admission(ledger)

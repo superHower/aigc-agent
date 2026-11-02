@@ -1,41 +1,30 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Table, Typography } from 'antd'
+import { Alert, Button, Card, Form, Input, InputNumber, Modal, Space, Table, Typography, Upload } from 'antd'
 import { api, promptError } from '../api/client'
 import { AppHeader } from '../components/AppHeader'
-import type { Package } from './Membership'
+import { issuance, type Plan } from './Credits'
 
 export function Packages() {
-  const [items, setItems] = useState<Package[]>([])
-  const [editing, setEditing] = useState<Package | null>()
+  const [items, setItems] = useState<Plan[]>([])
+  const [editing, setEditing] = useState<Plan>()
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [serviceUrl, setServiceUrl] = useState<string>()
   const [form] = Form.useForm()
-  const load = () => api.get('/admin/packages').then(r => setItems(r.data.items)).catch(e => setError(promptError(e)))
-  useEffect(() => { void load() }, [])
-  function edit(p: Package | null) {
-    setEditing(p); form.setFieldsValue(p ?? { name: '', kind: 'credits', price_cents: 600, credits: 30, membership_days: 0, status: 'draft', sort_order: 0 })
-  }
-  async function save() {
-    try {
-      const values = await form.validateFields(); setSaving(true)
-      if (editing) await api.put(`/admin/packages/${editing.id}`, values)
-      else await api.post('/admin/packages', values)
-      setEditing(undefined); setError(''); await load()
-    } catch (e) { setError(promptError(e)) } finally { setSaving(false) }
-  }
+  const [riskForm] = Form.useForm()
+  useEffect(() => { api.get('/admin/risk-settings').then(r => riskForm.setFieldsValue(r.data)).catch(e => setError(promptError(e))) }, [])
+  const load = () => api.get('/admin/membership-plans').then(r => setItems(r.data.items))
+  useEffect(() => { Promise.all([load(), api.get('/recharge').then(r => setServiceUrl(r.data.customer_service_url))]).catch(e => setError(promptError(e))) }, [])
   return <div className="app-shell"><AppHeader /><main className="workspace-content"><Space direction="vertical" size="large" className="page-stack">
     {error && <Alert type="error" message={error} />}
-    <Card title="套餐设置" extra={<Button type="primary" onClick={() => edit(null)}>新增套餐</Button>}><Typography.Paragraph type="secondary">建议套餐默认草稿，确认价格后再上架。下架保留历史记录；会员卡天数须大于零，积分包天数为零。人工充值还需启用有效收款码。</Typography.Paragraph><Table rowKey="id" dataSource={items} pagination={false} columns={[
-      { title: '名称', dataIndex: 'name' }, { title: '价格（元）', dataIndex: 'price_cents', render: (v: number) => (v / 100).toFixed(2) }, { title: '积分', dataIndex: 'credits' }, { title: '会员天数', dataIndex: 'membership_days' }, { title: '状态', dataIndex: 'status', render: (v: string) => ({ draft: '草稿', active: '上架', inactive: '下架' }[v]) }, { title: '排序', dataIndex: 'sort_order' }, { title: '操作', render: (_, p: Package) => <Button onClick={() => edit(p)}>编辑</Button> },
+    <Card title="防滥用风控（仅后台）"><Typography.Paragraph>0 表示关闭对应风控。单账号日消耗按 UTC 自然日统计积分，包含任务冻结预留；并发仍受系统及渠道容量约束。</Typography.Paragraph><Form form={riskForm} layout="inline" onFinish={async values => { setBusy(true); try { await api.put('/admin/risk-settings', values); setError('') } catch (e) { setError(promptError(e)) } finally { setBusy(false) } }}>{([['daily_limit', '单账号日消耗积分上限'], ['concurrency', '单账号并发上限'], ['retry_limit', '失败重试上限']] as const).map(([name, label]) => <Form.Item name={name} label={label} key={name} rules={[{ required: true }]}><InputNumber min={0} precision={0} /></Form.Item>)}<Button htmlType="submit" loading={busy}>保存风控设置</Button></Form></Card>
+    <Card title="套餐配置"><Typography.Paragraph>周卡自开通起 7 天，月卡自开通起一个月，季卡自开通起 3 个月。赠送积分立即全额到账，会员期内有效，到期自动作废；额外充值 1 元=100 通用积分，永久有效。每日消耗、并发和失败重试限制属于后台风控设置，不作为用户权益限额展示。</Typography.Paragraph><Table rowKey="id" dataSource={items} pagination={false} scroll={{ x: 700 }} columns={[
+      { title: '套餐', dataIndex: 'name' }, { title: '积分/张', dataIndex: 'cost' }, { title: '会员费（元）', dataIndex: 'price_cents', render: (v: number) => (v / 100).toFixed(2) }, { title: '赠送积分', dataIndex: 'credits' }, { title: '发放与有效期', render: (_, p: Plan) => issuance(p.id) }, { title: '操作', render: (_, p: Plan) => <Button onClick={() => { setEditing(p); form.setFieldsValue(p) }}>编辑</Button> },
     ]} /></Card>
-    <Modal title={editing ? '编辑套餐' : '新增套餐'} open={editing !== undefined} onCancel={() => setEditing(undefined)} onOk={() => void save()} confirmLoading={saving} destroyOnClose><Form form={form} layout="vertical">
-      <Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true, max: 100 }]}><Input maxLength={100} /></Form.Item>
-      <Form.Item name="kind" label="类型"><Select options={[{ value: 'credits', label: '积分包' }, { value: 'membership', label: '会员卡' }]} /></Form.Item>
-      <Form.Item name="price_cents" label="价格（整数分）" rules={[{ required: true }]}><InputNumber min={1} max={100000000} precision={0} /></Form.Item>
-      <Form.Item name="credits" label="积分数" rules={[{ required: true }]}><InputNumber min={1} max={10000000} precision={0} /></Form.Item>
-      <Form.Item name="membership_days" label="会员天数" rules={[{ required: true }]}><InputNumber min={0} max={3650} precision={0} /></Form.Item>
-      <Form.Item name="status" label="状态"><Select options={[{ value: 'draft', label: '草稿' }, { value: 'active', label: '上架' }, { value: 'inactive', label: '下架' }]} /></Form.Item>
-      <Form.Item name="sort_order" label="排序" rules={[{ required: true }]}><InputNumber min={0} max={100000} precision={0} /></Form.Item>
+    <Card title="客服微信图片"><Typography.Paragraph>用户在充值中心添加此微信，由客服在用户管理中按邮箱充值积分、设置会员。</Typography.Paragraph>{serviceUrl && <img src={serviceUrl} alt="客服微信图片" style={{ width: 220, display: 'block', marginBottom: 16 }} />}<Upload accept="image/png,image/jpeg,image/webp" showUploadList={false} beforeUpload={file => { const data = new FormData(); data.append('file', file); setBusy(true); api.post('/admin/customer-service', data).then(r => { setServiceUrl(r.data.url); setError('') }).catch(e => setError(promptError(e))).finally(() => setBusy(false)); return false }}><Button loading={busy}>上传客服微信图片</Button></Upload></Card>
+    <Modal title="编辑套餐" open={!!editing} onCancel={() => setEditing(undefined)} confirmLoading={busy} onOk={async () => { try { const values = await form.validateFields(); setBusy(true); await api.put(`/admin/membership-plans/${editing?.id}`, values); setEditing(undefined); setError(''); await load() } catch (e) { setError(promptError(e)) } finally { setBusy(false) } }}><Form form={form} layout="vertical">
+      <Form.Item name="name" label="套餐名称" rules={[{ required: true }]}><Input /></Form.Item>
+      {([['cost', '单张消耗积分'], ['price_cents', '会员费（整数分）'], ['credits', '赠送积分']] as const).map(([name, label]) => <Form.Item key={name} name={name} label={label} rules={[{ required: true }]}><InputNumber min={name === 'cost' ? 1 : 0} precision={0} /></Form.Item>)}
     </Form></Modal>
   </Space></main></div>
 }

@@ -19,6 +19,52 @@ def username(value):
     return value
 
 
+def email(value):
+    value = value.strip().lower()
+    if len(value) > 254 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', value):
+        raise ValueError('请输入有效的邮箱地址')
+    return value
+
+
+def register_email(store, name, address, password, ip):
+    password_hash = hash_password(password)
+    with store.transaction() as db:
+        auth_transaction(db)
+        allowed = throttle(db, 'register:' + keyed(secret(db), ip), limit=10, minutes=60)
+    if not allowed:
+        raise HTTPException(429, '注册过于频繁，请稍后重试')
+    with store.transaction() as db:
+        auth_transaction(db)
+        if db.execute('SELECT id FROM users WHERE username=? OR email=?', (name, address)).fetchone():
+            raise HTTPException(409, '用户名或邮箱已被使用')
+        ident = uuid4().hex
+        db.execute('INSERT INTO users (id,username,email,password_hash,role,created_at) VALUES (?,?,?,?,?,?)',
+                   (ident, name, address, password_hash, 'user', utc_now()))
+        from backend.services.credits import ensure_account
+        ensure_account(db, ident)
+    return {'id': ident, 'username': name, 'role': 'user'}
+
+
+def change_password(store, address, old_password, password, ip):
+    from backend.services.passwords import verify_password, DUMMY_HASH
+    with store.transaction() as db:
+        auth_transaction(db)
+        pepper = secret(db)
+        allowed = throttle(db, 'password-ip:' + keyed(pepper, ip), limit=40)
+        account_allowed = throttle(db, 'password-account:' + keyed(pepper, address))
+    if not allowed or not account_allowed:
+        raise HTTPException(429, '尝试过多，请稍后重试')
+    with store.transaction() as db:
+        auth_transaction(db)
+        user = db.execute('SELECT * FROM users WHERE email=?', (address,)).fetchone()
+        valid = verify_password(old_password, user['password_hash'] if user else DUMMY_HASH)
+        if not user or user['disabled'] or not valid:
+            raise HTTPException(401, '邮箱或原密码错误')
+        db.execute('UPDATE users SET password_hash=? WHERE id=?', (hash_password(password), user['id']))
+        db.execute('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL', (utc_now(), user['id']))
+    return {'ok': True}
+
+
 def phone(value):
     value = value.strip()
     if not re.fullmatch(r'1[3-9][0-9]{9}', value):

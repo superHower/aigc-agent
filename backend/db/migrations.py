@@ -256,6 +256,66 @@ def migrate(store):
                 upstream_id TEXT, state TEXT NOT NULL
             )''')
             stamp(db, 11)
+        if 12 not in applied:
+            # v7: email/password authentication and the fixed membership catalogue.
+            if 'email' not in columns(db, 'users'):
+                db.execute('ALTER TABLE users ADD COLUMN email TEXT')
+                db.execute('CREATE UNIQUE INDEX idx_users_email ON users(email) WHERE email IS NOT NULL')
+            db.executescript('''
+                CREATE TABLE membership_plans (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, cost INTEGER NOT NULL CHECK(cost>0),
+                    price_cents INTEGER NOT NULL CHECK(price_cents>=0), credits INTEGER NOT NULL CHECK(credits>=0),
+                    image_limit INTEGER NOT NULL CHECK(image_limit>=0), total_limit INTEGER NOT NULL CHECK(total_limit>=0),
+                    risk_limit INTEGER NOT NULL CHECK(risk_limit>=0)
+                );
+                CREATE TABLE subscriptions (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), plan_id TEXT NOT NULL,
+                    snapshot TEXT NOT NULL, starts_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                    cancelled_at TEXT, created_at TEXT NOT NULL
+                );
+                CREATE INDEX idx_subscriptions_user ON subscriptions(user_id,starts_at);
+                CREATE TABLE membership_periods (
+                    id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id),
+                    starts_at TEXT NOT NULL, expires_at TEXT NOT NULL, credits INTEGER NOT NULL,
+                    lot_id TEXT REFERENCES credit_lots(id), UNIQUE(subscription_id,starts_at)
+                );
+                CREATE TABLE membership_usage (
+                    reservation_id TEXT PRIMARY KEY REFERENCES credit_reservations(id),
+                    subscription_id TEXT NOT NULL REFERENCES subscriptions(id), period_id TEXT NOT NULL REFERENCES membership_periods(id)
+                );
+                ALTER TABLE credit_allocations RENAME TO credit_allocations_legacy;
+                CREATE TABLE credit_allocations (
+                    reservation_id TEXT NOT NULL REFERENCES credit_reservations(id),
+                    lot_id TEXT NOT NULL REFERENCES credit_lots(id), amount INTEGER NOT NULL CHECK(amount>0),
+                    PRIMARY KEY(reservation_id,lot_id)
+                );
+                INSERT INTO credit_allocations SELECT * FROM credit_allocations_legacy;
+                DROP TABLE credit_allocations_legacy;
+            ''')
+            for row in (
+                ('ordinary', '普通', 20, 0, 0, 0, 0, 0),
+                ('weekly', '周卡', 16, 5990, 4000, 250, 250, 500),
+                ('monthly', '月卡', 12, 19900, 12000, 1000, 1000, 2000),
+                ('quarterly', '季卡', 8, 49900, 16000, 2000, 6000, 8000),
+            ):
+                db.execute('INSERT INTO membership_plans VALUES (?,?,?,?,?,?,?,?)', row)
+            stamp(db, 12)
+        if 13 not in applied:
+            db.execute("UPDATE membership_plans SET image_limit=0,total_limit=0,risk_limit=0")
+            db.execute("UPDATE membership_plans SET credits=credits*3 WHERE id='quarterly'")
+            # Convert existing period benefits without changing spent/frozen balances.
+            from backend.db.task_store import utc_now
+            now = utc_now()
+            for sub in db.execute('SELECT * FROM subscriptions WHERE cancelled_at IS NULL AND expires_at>?', (now,)).fetchall():
+                db.execute('UPDATE credit_lots SET expires_at=? WHERE id IN (SELECT lot_id FROM membership_periods WHERE subscription_id=?)', (sub['expires_at'], sub['id']))
+                from backend.services.credits import grant
+                for period in db.execute('SELECT * FROM membership_periods WHERE subscription_id=? AND lot_id IS NULL', (sub['id'],)).fetchall():
+                    if period['credits']:
+                        lot = grant(db, sub['user_id'], period['credits'], 'membership', 'period:'+period['id'], sub['expires_at'])
+                        db.execute('UPDATE membership_periods SET lot_id=?,expires_at=? WHERE id=?', (lot, sub['expires_at'], period['id']))
+            for key, value in (('risk_daily_limit', '100000'), ('risk_concurrency', '3'), ('risk_retry_limit', '2')):
+                db.execute('INSERT INTO system_settings (key,value) VALUES (?,?) ON CONFLICT(key) DO NOTHING', (key, value))
+            stamp(db, 13)
 
 
 def stamp(db, version):

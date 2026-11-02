@@ -37,6 +37,7 @@ import { AnnotatedImage } from '../components/AnnotatedImage'
 import { TextBlockTable } from '../components/TextBlockTable'
 import { useTaskProgress } from '../hooks/useTaskProgress'
 import { AppHeader } from '../components/AppHeader'
+import { FrozenCreditsNotice } from '../components/FrozenCreditsNotice'
 import { TaskResults } from '../components/TaskResults'
 import { PromptTemplatePicker } from '../components/PromptTemplatePicker'
 import { useAuth } from '../components/AuthProvider'
@@ -57,13 +58,14 @@ export function Workspace() {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   const [available, setAvailable] = useState<number | null>(null)
+  const [costPerImage, setCostPerImage] = useState(20)
   const submission = useRef<{ payload: string; key: string } | null>(null)
   useEffect(() => {
     if (isAdmin) {
       setAvailable(0)
       return
     }
-    const refresh = () => api.get('/account/credits').then(r => setAvailable(r.data.available)).catch(() => setAvailable(null))
+    const refresh = () => Promise.all([api.get('/account/credits'), api.get('/recharge')]).then(([r, c]) => { setAvailable(r.data.available); setCostPerImage(c.data.current_plan.cost) }).catch(() => setAvailable(null))
     void refresh()
     const timer = window.setInterval(() => void refresh(), 10000)
     return () => window.clearInterval(timer)
@@ -208,6 +210,7 @@ export function Workspace() {
   }
 
   const generate = async (kind: 'image' | 'video' = 'image') => {
+    if (kind === 'video' && !isAdmin) return
     if (kind === 'video' && (!videoResolution || !videoRatio || !videoMode)) {
       message.warning('请先选择视频清晰度、比例和生成模式')
       return
@@ -260,7 +263,7 @@ export function Workspace() {
       }
       const preview = (await api.post('/generate/preview', payload)).data
       setAvailable(preview.available)
-      if (preview.required_credits > preview.available) { message.error('可用积分不足，请充值后重试；未扣除积分'); return }
+      if (preview.required_credits > preview.available) { message.error('可用积分不足。如有任务预留积分，请在任务历史查看进度，等待完成或取消任务后释放；也可前往充值中心充值。本次未扣费。'); return }
       const serialized = JSON.stringify(payload)
       if (submission.current?.payload !== serialized) submission.current = { payload: serialized, key: idempotencyKey() }
       const result = await generateMultiImage(payload, submission.current!.key)
@@ -388,7 +391,7 @@ export function Workspace() {
                 </Space>
                 <Alert
                   type="info"
-                  message={isAdmin ? `预计生成 ${imageCount} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}；成本请在经营总览按调用记录查看。` : `预计生成 ${imageCount} 张，需要 ${imageCount} 积分；可用 ${available ?? '加载中'}。成功扣费，最终失败或取消释放；文字识别免费。`}
+                  message={isAdmin ? `预计生成 ${imageCount} 张图片${ocrSteps ? `，另有 ${ocrSteps} 个文字编辑步骤` : ''}；成本请在经营总览按调用记录查看。` : `预计生成 ${imageCount} 张，需要 ${imageCount * costPerImage} 积分；可用 ${available ?? '加载中'}。成功扣费，最终失败或取消释放；文字识别免费。`}
                 />
               </Space>
             </Card>
@@ -418,7 +421,7 @@ export function Workspace() {
               </Card>
             )}
             <Card className="panel-card">
-              {mode === 'prompt_group' && <Space direction="vertical" className="page-stack" style={{ marginBottom: 20 }}>
+              {isAdmin && mode === 'prompt_group' && <Space direction="vertical" className="page-stack" style={{ marginBottom: 20 }}>
                 <Typography.Title level={5}>批量生视频设置</Typography.Title>
                 <Alert type="info" message="使用上方上传的一张图片及所选提示词组，每条提示词生成一个视频。首尾帧模式将该图片作为首帧，仅支持 768P；1080P、2K 仅支持 16:9、9:16。取消只停止本地等待，上游可能继续生成并收费。" />
                 <Space wrap>
@@ -444,7 +447,7 @@ export function Workspace() {
                 >
                   {mode === 'prompt_group' ? '提交批量生图任务' : '提交批量任务'}
                 </Button>
-                {mode === 'prompt_group' && <Button loading={submitting} disabled={!files.length || !imageCount || uploading || analyzing || submitting || groupsLoading || library.loading || !!groupError || !!library.error || groupTemplates.some(template => !template) || !videoResolution || !videoRatio || !videoMode} onClick={() => void generate('video')}>提交批量生视频</Button>}
+                {isAdmin && mode === 'prompt_group' && <Button loading={submitting} disabled={!files.length || !imageCount || uploading || analyzing || submitting || groupsLoading || library.loading || !!groupError || !!library.error || groupTemplates.some(template => !template) || !videoResolution || !videoRatio || !videoMode} onClick={() => void generate('video')}>提交批量生视频</Button>}
                 <Link to="/tasks">查看所有并行任务</Link>
               </Space>
             </Card>
@@ -483,6 +486,7 @@ export function Workspace() {
                   </Typography.Text>
                   <Typography.Text>全局并发上限 {task?.max_concurrency ?? '—'}</Typography.Text>
                   {isAdmin ? <Typography.Text>实际成本以核实账单为准</Typography.Text> : <Typography.Text>已扣 {task?.credit_summary?.settled ?? 0} · 冻结 {task?.credit_summary?.frozen ?? 0} · 释放 {task?.credit_summary?.released ?? 0} 积分</Typography.Text>}
+                  {!isAdmin && <FrozenCreditsNotice amount={task?.credit_summary?.frozen ?? 0} taskId={taskId ?? undefined} />}
                   <Popconfirm
                     title="确定取消本次任务吗？"
                     description="排队中的步骤会停止，正在执行的步骤可能在当前请求结束后停止。"

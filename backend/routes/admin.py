@@ -12,7 +12,7 @@ router = APIRouter(prefix='/api/admin', tags=['admin'])
 
 
 @router.get('/users')
-def users(request: Request, limit: int = 50, offset: int = 0):
+def users(request: Request, limit: int = 50, offset: int = 0, email: str = ''):
     require_admin(request)
     if not 1 <= limit <= 100 or offset < 0:
         raise HTTPException(422, '分页参数不正确')
@@ -21,7 +21,56 @@ def users(request: Request, limit: int = 50, offset: int = 0):
         credits.begin(db)
         for row in db.execute('SELECT user_id FROM credit_accounts').fetchall():
             credits.expire(db, row['user_id'])
-        return {'items': [dict(r) for r in db.execute('SELECT u.id,u.username,u.phone,u.role,u.disabled,u.membership_expires_at,u.created_at,COALESCE(c.available,0) AS available,COALESCE(c.frozen,0) AS frozen FROM users u LEFT JOIN credit_accounts c ON c.user_id=u.id ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?', (limit, offset))], 'total': db.execute('SELECT COUNT(*) FROM users').fetchone()[0]}
+        where = ' WHERE u.email=?' if email else ''
+        params = (email.strip().lower(),) if email else ()
+        return {'items': [dict(r) for r in db.execute('SELECT u.id,u.username,u.email,u.role,u.disabled,u.membership_expires_at,u.created_at,COALESCE(c.available,0) AS available,COALESCE(c.frozen,0) AS frozen FROM users u LEFT JOIN credit_accounts c ON c.user_id=u.id'+where+' ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?', (*params, limit, offset))], 'total': db.execute('SELECT COUNT(*) FROM users u'+where, params).fetchone()[0]}
+
+
+class EmailBinding(BaseModel):
+    email: str
+
+
+@router.put('/users/{user_id}/email')
+def bind_email(user_id: str, payload: EmailBinding, request: Request):
+    actor = require_admin(request)
+    from backend.services.identity import email
+    try:
+        address = email(payload.email)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    with request.app.state.store.transaction() as db:
+        auth_transaction(db)
+        if not db.execute('SELECT id FROM users WHERE id=?', (user_id,)).fetchone():
+            raise HTTPException(404, '用户不存在')
+        if db.execute('SELECT id FROM users WHERE email=? AND id<>?', (address, user_id)).fetchone():
+            raise HTTPException(409, '邮箱已被使用')
+        db.execute('UPDATE users SET email=? WHERE id=?', (address, user_id))
+        db.execute('UPDATE sessions SET revoked_at=? WHERE user_id=?', (utc_now(), user_id))
+        db.execute('INSERT INTO audit_logs VALUES (?,?,?,?,?,?,?)', (uuid4().hex, actor['id'], 'bind_email', user_id, '绑定登录邮箱', json.dumps({'email': address}), utc_now()))
+    return {'ok': True}
+
+
+class MembershipAssignment(BaseModel):
+    plan_id: str
+
+
+@router.post('/users/{user_id}/membership')
+def assign_membership(user_id: str, payload: MembershipAssignment, request: Request):
+    actor = require_admin(request)
+    from backend.services import credits, orders, subscriptions
+    key = credits.require_key(request)
+    params = {'user_id': user_id, 'plan_id': payload.plan_id}
+    with request.app.state.store.transaction() as db:
+        credits.begin(db)
+        if not db.execute('SELECT id FROM users WHERE id=?', (user_id,)).fetchone():
+            raise HTTPException(404, '用户不存在')
+        if not orders.previous(db, actor['id'], 'membership', key, params):
+            expires = subscriptions.assign(db, user_id, payload.plan_id)
+            orders.record(db, actor['id'], 'membership', key, params, user_id)
+            db.execute('INSERT INTO audit_logs VALUES (?,?,?,?,?,?,?)', (uuid4().hex, actor['id'], 'membership_assign', user_id, '设置会员', json.dumps(params), utc_now()))
+        else:
+            expires = db.execute('SELECT membership_expires_at FROM users WHERE id=?', (user_id,)).fetchone()['membership_expires_at']
+    return {'expires_at': expires}
 
 
 class UserStatus(BaseModel):

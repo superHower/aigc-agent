@@ -34,6 +34,7 @@ def renew(db, user_id, days, key):
 def status(store, user_id, ordinary=1, member=3):
     with store.transaction() as db:
         row = db.execute('SELECT membership_expires_at FROM users WHERE id=?', (user_id,)).fetchone()
+        risk = db.execute("SELECT value FROM system_settings WHERE key='risk_concurrency'").fetchone()
     expires = row['membership_expires_at'] if row else None
     is_member = active(expires)
-    return {'active': is_member, 'expires_at': expires, 'concurrency': member if is_member else ordinary}
+    return {'active': is_member, 'expires_at': expires, 'concurrency': int(risk['value']) if risk and int(risk['value']) else (member if is_member else ordinary)}

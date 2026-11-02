@@ -10,10 +10,7 @@ import { Spin } from 'antd'
 import { Login } from './pages/Login'
 import { PhoneAuth } from './pages/PhoneAuth'
 import { Credits } from './pages/Credits'
-import { Membership } from './pages/Membership'
 import { Packages } from './pages/Packages'
-import { Orders, OrderDetail } from './pages/Orders'
-import { PaymentSettings } from './pages/PaymentSettings'
 import { Users } from './pages/Users'
 import { AuthProvider, RequireAuth, useAuth } from './components/AuthProvider'
 
@@ -47,17 +44,17 @@ export function App() {
           }
         />
         <Route path="/workspace" element={<Workspace />} />
-        <Route path="/account/credits" element={<Credits />} />
-        <Route path="/account/membership" element={<Membership />} />
-        <Route path="/orders" element={<Orders />} />
-        <Route path="/orders/:id" element={<OrderDetail />} />
+        <Route path="/account/recharge" element={<Credits />} />
+        <Route path="/account/credits" element={<Navigate to="/account/recharge" replace />} />
+        <Route path="/account/membership" element={<Navigate to="/account/recharge" replace />} />
+        <Route path="/orders/*" element={<Navigate to="/account/recharge" replace />} />
         <Route element={<RequireAuth admin />}>
           <Route path="/admin" element={<Suspense fallback={<Spin fullscreen />}><Operations /></Suspense>} />
           <Route path="/admin/users" element={<Users />} />
           <Route path="/admin/audit" element={<Suspense fallback={<Spin fullscreen />}><OperationRecords /></Suspense>} />
           <Route path="/admin/attempts" element={<Suspense fallback={<Spin fullscreen />}><OperationRecords attempts /></Suspense>} />
-          <Route path="/admin/orders" element={<Orders admin />} />
-          <Route path="/admin/payment-settings" element={<PaymentSettings />} />
+          <Route path="/admin/orders" element={<Navigate to="/admin/users" replace />} />
+          <Route path="/admin/payment-settings" element={<Navigate to="/admin/packages" replace />} />
         </Route>
         <Route element={<RequireAuth admin />}><Route path="/admin/packages" element={<Packages />} /></Route>
         <Route path="/tasks" element={<Tasks />} />

@@ -28,6 +28,7 @@ from backend.routes.admin import router as admin_router
 from backend.routes.accounts import router as accounts_router
 from backend.routes.packages import router as packages_router
 from backend.routes.orders import router as orders_router
+from backend.routes.recharge import router as recharge_router
 from backend.routes.operations import router as operations_router
 from backend.routes.alipay import router as alipay_router
 from backend.services import credits
@@ -136,6 +137,7 @@ app.include_router(admin_router)
 app.include_router(accounts_router)
 app.include_router(packages_router)
 app.include_router(orders_router)
+app.include_router(recharge_router)
 app.include_router(operations_router)
 app.include_router(alipay_router)
 
@@ -148,6 +150,9 @@ async def invalid_request(request: Request, exc: RequestValidationError):
 @app.middleware('http')
 async def migration_access(request: Request, call_next):
     path = request.url.path
+    # v7 retires online checkout and the manual payment-review workflow.
+    if path.startswith(('/api/orders', '/api/admin/orders', '/api/admin/payment-codes', '/api/alipay', '/api/order-evidence-assets', '/api/admin/packages')) or path in ('/api/payment-availability', '/api/packages', '/api/auth/captcha', '/api/auth/sms'):
+        return JSONResponse({'detail': '此入口已停用，请通过充值中心联系微信客服'}, status_code=410)
     if path.startswith('/api/') and request.method != 'OPTIONS':
         if path == '/api/health':
             return JSONResponse({'status': 'ok'})
@@ -428,6 +433,8 @@ async def generate_batch(payload: BatchRequest, request: Request):
 
 @app.post("/api/generate/multi-image")
 async def generate_multi_image(payload: MultiImageRequest, request: Request):
+    if payload.generation_kind == 'video' and current_user(request)['role'] != 'admin':
+        raise HTTPException(403, '批量生视频仅限超级管理员使用')
     current = state(request)
     if payload.generation_kind == 'video' and not current.channels.available(channel_type='video'):
         raise HTTPException(422, '请先配置可用的 MiniMax H3 视频渠道')
@@ -471,11 +478,14 @@ async def generate_multi_image(payload: MultiImageRequest, request: Request):
     task_id, created = current.store.create_batch(task_id, source_ids, rule, jobs, owner_id=user['id'], billable=user['role'] != 'admin', key=key, digest=digest)
     if created:
         await current.manager.create_batch(task_id, source_jobs, rule)
-    return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "required_credits": sum(bool(o.get('variant')) for o in rule['outputs'].values()) if user['role'] != 'admin' else 0, "estimated_cost": round(len(jobs) * 0.05, 2) if user['role'] == 'admin' else 0}
+    summary = task_credit_summary(current.store, task_id)
+    return {"task_id": task_id, "status": "queued", "total_jobs": len(jobs), "required_credits": sum(summary.values()), "estimated_cost": round(len(jobs) * 0.05, 2) if user['role'] == 'admin' else 0}
 
 
 @app.post('/api/generate/preview')
 async def generation_preview(payload: MultiImageRequest, request: Request):
+    if payload.generation_kind == 'video' and current_user(request)['role'] != 'admin':
+        raise HTTPException(403, '批量生视频仅限超级管理员使用')
     prompt_group = resolve_generation_group(payload, request)
     ids = payload.source_ids + ([payload.reference_file_id] if payload.reference_file_id else [])
     for file_id in ids:
@@ -483,7 +493,13 @@ async def generation_preview(payload: MultiImageRequest, request: Request):
     count = len(prompt_group['templates']) if prompt_group else len(payload.source_ids) * len(payload.aspect_ratios)
     user = current_user(request)
     available = credits.balance(state(request).store, user['id'])['available']
-    return {'images': count, 'required_credits': count if user['role'] != 'admin' else 0, 'available': available}
+    with state(request).store.transaction() as db:
+        credits.begin(db)
+        cost = 0
+        if user['role'] != 'admin':
+            from backend.services.subscriptions import pricing
+            cost, _, _ = pricing(db, user['id'], count)
+    return {'images': count, 'required_credits': count * cost, 'cost_per_image': cost, 'available': available}
 
 
 def resolve_generation_group(payload, request):
@@ -658,7 +674,8 @@ def task_view(request: Request, task_id: str) -> TaskView:
 
 def task_credit_summary(store, task_id):
     with store.transaction() as db:
-        rows = db.execute('''SELECT r.state,COUNT(*) AS amount FROM credit_reservations r JOIN jobs j ON j.id=r.job_id
+        rows = db.execute('''SELECT r.state,SUM(a.amount) AS amount FROM credit_reservations r JOIN jobs j ON j.id=r.job_id
+            JOIN credit_allocations a ON a.reservation_id=r.id
             WHERE j.task_id=? GROUP BY r.state''', (task_id,)).fetchall()
     return {row['state']: row['amount'] for row in rows}
 
@@ -720,6 +737,8 @@ async def retry_task(task_id: str, payload: RetryRequest, request: Request):
     current = state(request)
     task = require_task(request, task_id)
     user = current_user(request)
+    if json.loads(task['edit_rule']).get('generation_kind') == 'video' and user['role'] != 'admin':
+        raise HTTPException(403, '批量生视频仅限超级管理员使用')
     if task['billable'] or user['role'] != 'admin':
         created = credits.retry(current.store, task['owner_id'], task_id, payload.job_id, credits.require_key(request))
         if created:

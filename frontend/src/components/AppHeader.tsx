@@ -7,8 +7,7 @@ import { useAuth } from './AuthProvider'
 
 const management = [
   { key: '/admin', label: '经营总览' }, { key: '/admin/users', label: '用户管理' },
-  { key: '/admin/orders', label: '充值审核' }, { key: '/admin/packages', label: '套餐设置' },
-  { key: '/admin/payment-settings', label: '收款设置' }, { key: '/channels', label: '渠道管理' },
+  { key: '/admin/packages', label: '套餐与客服设置' }, { key: '/channels', label: '渠道管理' },
   { key: '/admin/attempts', label: '调用明细' }, { key: '/admin/audit', label: '操作审计' },
 ]
 type Account = { available: number; frozen: number; active: boolean; expires_at: string | null; concurrency: number }
@@ -49,8 +48,7 @@ export function AppHeader() {
     { key: '/tasks', label: '任务记录' }, { key: '/prompts', label: '提示词管理' },
   ] : [
     { key: '/', label: '首页' }, { key: '/workspace', label: '工作台' }, { key: '/tasks', label: '任务历史' },
-    { key: '/account/credits', label: '我的积分' }, { key: '/account/membership', label: '会员套餐' },
-    { key: '/orders', label: '我的订单' }, { key: '/prompts', label: '提示词管理' },
+    { key: '/account/recharge', label: '充值中心' }, { key: '/prompts', label: '提示词管理' },
   ]
   const selected = (key: string) => key === '/' ? location.pathname === '/' : location.pathname === key || location.pathname.startsWith(key + '/')
   const currentManagement = management.find(item => item.key === location.pathname)
@@ -60,9 +58,10 @@ export function AppHeader() {
     {isAdmin ? <><p>生图不限积分使用，无需购买套餐。</p><Typography.Text type="secondary">管理用户、充值、渠道和平台数据。</Typography.Text></> : <>
       {unavailable && <p>账户信息暂时无法更新，请稍后重试。</p>}
       <p>可用积分：{account?.available ?? '—'}　冻结：{account?.frozen ?? '—'}</p>
+      {!!account?.frozen && <><p>冻结积分为生成任务预留，成功后扣费，最终失败或取消后自动释放。请查看任务进度，等待完成或取消任务；已到期的会员积分释放后作废。</p><Button type="link" onClick={() => navigate('/tasks')}>查看任务进度</Button></>}
       <p>会员到期：{account?.expires_at ? new Date(account.expires_at).toLocaleString() : '未开通'}</p>
       <p>跨任务并发：{account?.concurrency ?? '—'} 张</p>
-      <Button type="link" onClick={() => navigate('/account/credits')}>积分明细</Button><Button type="link" onClick={() => navigate('/account/membership')}>会员套餐</Button>
+      <Button type="link" onClick={() => navigate('/account/recharge')}>充值中心</Button>
     </>}
     <div className="account-popover-footer"><Button block onClick={async () => { await api.post('/auth/logout'); window.location.assign('/login') }}>退出登录</Button></div>
   </div>

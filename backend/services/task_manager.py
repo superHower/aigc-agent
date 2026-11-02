@@ -247,6 +247,11 @@ class TaskManager:
                 await self._run_batch_round(task_id, source_jobs, rule)
                 if not self.channel_pool or not self.channel_pool.store.available(task_id):
                     break
+                with self.store.transaction() as db:
+                    risk = db.execute("SELECT value FROM system_settings WHERE key='risk_retry_limit'").fetchone()
+                current_task = self.store.get_task(task_id)
+                if risk and int(risk['value']) > 0 and current_task['auto_retry_count'] >= int(risk['value']):
+                    break
                 if not self.store.prepare_auto_retry(task_id, scope):
                     break
                 # Rebuild complete chains: successful prerequisites supply their outputs,

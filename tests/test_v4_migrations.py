@@ -32,7 +32,7 @@ def test_upgrade_old_database_and_one_time_admin(tmp_path):
     TaskStore(path)
     assert validate(store)['ok']
     with store.transaction() as db:
-        assert [r[0] for r in db.execute('SELECT version FROM schema_migrations ORDER BY version')] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        assert [r[0] for r in db.execute('SELECT version FROM schema_migrations ORDER BY version')] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         assert db.execute('SELECT owner_id FROM analyses').fetchone()[0] == owner
         encoded = db.execute('SELECT password_hash FROM users').fetchone()[0]
         assert verify_password('test-password-123', encoded)
@@ -49,10 +49,10 @@ def test_transaction_rolls_back_and_bootstrap_refuses_active_tasks(tmp_path):
             db.execute("INSERT INTO system_settings VALUES ('test','value')")
             raise RuntimeError()
     with store.transaction() as db:
-        assert db.execute('SELECT * FROM system_settings').fetchone() is None
+        assert db.execute("SELECT * FROM system_settings WHERE key='test'").fetchone() is None
         db.execute('INSERT INTO tasks (id,created_at,updated_at,source_ids,edit_rule) VALUES (?,?,?,?,?)', ('task', utc_now(), utc_now(), '[]', '{}'))
     with pytest.raises(ValueError, match='活动任务'):
-        bootstrap_admin(store, 'admin', 'test-password-123')
+        bootstrap_admin(store, 'admin', 'test-password-123', 'admin@example.com')
     with store.transaction() as db:
         assert db.execute('SELECT * FROM users').fetchone() is None
 
@@ -85,15 +85,15 @@ def test_backup_restore_and_tamper_detection(tmp_path):
 def test_business_routes_require_admin_session_and_csrf(tmp_path, monkeypatch):
     from backend.main import app
     store = TaskStore(tmp_path / 'auth.db')
-    bootstrap_admin(store, 'admin', 'test-password-123')
+    bootstrap_admin(store, 'admin', 'test-password-123', 'admin@example.com')
     monkeypatch.setattr(app.state, 'store', store, raising=False)
     monkeypatch.setattr(app.state, 'login_attempts', {}, raising=False)
     client = TestClient(app)
     assert client.get('/api/health').json() == {'status': 'ok'}
     for url in ('/api/tasks', '/api/files/secret.png', '/api/channels', '/api/dashboard'):
         assert client.get(url).status_code == 401
-    assert client.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}, headers={'origin': 'https://evil.example'}).status_code == 403
-    assert client.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200
+    assert client.post('/api/auth/login', json={'account': 'admin@example.com', 'password': 'test-password-123'}, headers={'origin': 'https://evil.example'}).status_code == 403
+    assert client.post('/api/auth/login', json={'account': 'admin@example.com', 'password': 'test-password-123'}).status_code == 200
     assert client.get('/api/auth/me').json()['username'] == 'admin'
     assert client.post('/api/auth/logout').status_code == 403
     client.headers['X-CSRF-Token'] = client.cookies['csrf']

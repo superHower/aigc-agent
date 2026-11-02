@@ -49,6 +49,8 @@ def trial(db, user_id, phone):
 
 
 def expire(db, user_id):
+    from backend.services.subscriptions import sync
+    sync(db, user_id)
     ensure_account(db, user_id)
     for lot in db.execute('SELECT * FROM credit_lots WHERE user_id=? AND expires_at<=? AND available>0 ORDER BY expires_at,id', (user_id, utc_now())).fetchall():
         amount = lot['available']
@@ -66,36 +68,48 @@ def balance(store, user_id):
 
 
 def reserve(db, user_id, job_ids):
+    from backend.services.subscriptions import pricing
+    cost, subscription_id, period_id = pricing(db, user_id, len(job_ids))
     expire(db, user_id)
     account = db.execute('SELECT * FROM credit_accounts WHERE user_id=?', (user_id,)).fetchone()
-    if account['available'] < len(job_ids):
+    if account['available'] < len(job_ids) * cost:
         raise HTTPException(402, '可用积分不足，未创建任务或冻结积分，请充值后重试')
     lots = [dict(r) for r in db.execute('''SELECT * FROM credit_lots WHERE user_id=? AND available>0
         ORDER BY CASE WHEN expires_at IS NULL THEN 1 ELSE 0 END,expires_at,created_at,id''', (user_id,))]
     for job_id in job_ids:
-        lot = next(lot for lot in lots if lot['available'] > 0)
-        lot['available'] -= 1
         round_number = db.execute('SELECT COALESCE(MAX(round),0)+1 FROM credit_reservations WHERE job_id=?', (job_id,)).fetchone()[0]
         reservation = uuid4().hex
         db.execute("INSERT INTO credit_reservations VALUES (?,?,?,?,'frozen',?)", (reservation, job_id, user_id, round_number, utc_now()))
-        db.execute('INSERT INTO credit_allocations VALUES (?,?,1)', (reservation, lot['id']))
-        db.execute('UPDATE credit_lots SET available=available-1,frozen=frozen+1 WHERE id=?', (lot['id'],))
-        entry(db, user_id, lot['id'], 'freeze', -1, 1, 'freeze:'+reservation)
+        if subscription_id:
+            db.execute('INSERT INTO membership_usage VALUES (?,?,?)', (reservation, subscription_id, period_id))
+        remaining = cost
+        for lot in lots:
+            take = min(remaining, lot['available'])
+            if not take:
+                continue
+            lot['available'] -= take
+            remaining -= take
+            db.execute('INSERT INTO credit_allocations VALUES (?,?,?)', (reservation, lot['id'], take))
+            db.execute('UPDATE credit_lots SET available=available-?,frozen=frozen+? WHERE id=?', (take, take, lot['id']))
+            entry(db, user_id, lot['id'], 'freeze', -take, take, 'freeze:'+reservation+':'+lot['id'])
+            if remaining == 0:
+                break
 
 
 def finish(db, job_id, success):
-    rows = db.execute('''SELECT r.*,a.lot_id,l.expires_at FROM credit_reservations r
+    rows = db.execute('''SELECT r.*,a.lot_id,a.amount,l.expires_at FROM credit_reservations r
         JOIN credit_allocations a ON a.reservation_id=r.id JOIN credit_lots l ON l.id=a.lot_id
         WHERE r.job_id=? AND r.state='frozen' ''', (job_id,)).fetchall()
     for row in rows:
         expired = row['expires_at'] and row['expires_at'] <= utc_now()
-        returned = 0 if success or expired else 1
+        amount = row['amount']
+        returned = 0 if success or expired else amount
         state = 'settled' if success else 'released'
         db.execute('UPDATE credit_reservations SET state=? WHERE id=?', (state, row['id']))
-        db.execute('UPDATE credit_lots SET available=available+?,frozen=frozen-1 WHERE id=?', (returned, row['lot_id']))
-        entry(db, row['user_id'], row['lot_id'], 'settle' if success else 'release', 0 if success else 1, -1, state+':'+row['id'])
+        db.execute('UPDATE credit_lots SET available=available+?,frozen=frozen-? WHERE id=?', (returned, amount, row['lot_id']))
+        entry(db, row['user_id'], row['lot_id'], 'settle' if success else 'release', 0 if success else amount, -amount, state+':'+row['id']+':'+row['lot_id'])
         if not success and expired:
-            entry(db, row['user_id'], row['lot_id'], 'expire', -1, 0, 'release-expire:'+row['id'])
+            entry(db, row['user_id'], row['lot_id'], 'expire', -amount, 0, 'release-expire:'+row['id']+':'+row['lot_id'])
 
 
 def reconcile_task(db, task_id, terminal=False):
@@ -152,6 +166,12 @@ def retry(store, user_id, task_id, job_id, key):
         selected = [j for j in jobs if j['status'] in ('failed', 'cancelled') and (not job_id or j['id'] == job_id)]
         if not selected:
             raise HTTPException(409, '没有可重试的失败或取消图片')
+        risk = db.execute("SELECT value FROM system_settings WHERE key='risk_retry_limit'").fetchone()
+        if risk and int(risk['value']) > 0:
+            for job in selected:
+                rounds = db.execute('SELECT COALESCE(MAX(round),0) FROM credit_reservations WHERE job_id=?', (job['id'],)).fetchone()[0]
+                if rounds > int(risk['value']):
+                    raise HTTPException(409, '已达到失败重试风控上限')
         # Normal users only use the multi-image path with no paid OCR edits.
         if not task['billable']:
             raise HTTPException(403, '历史任务不支持此计费入口')

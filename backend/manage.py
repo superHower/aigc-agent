@@ -2,6 +2,7 @@
 import argparse
 import getpass
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.config import Settings
@@ -17,6 +18,10 @@ def main():
     commands.add_parser('migrate')
     admin = commands.add_parser('init-admin')
     admin.add_argument('--username', required=True)
+    admin.add_argument('--email', required=True)
+    binding = commands.add_parser('bind-email')
+    binding.add_argument('--username', required=True)
+    binding.add_argument('--email', required=True)
     commands.add_parser('validate')
     save = commands.add_parser('backup')
     save.add_argument('destination', type=Path)
@@ -42,7 +47,15 @@ def main():
                 password = getpass.getpass('超管密码：')
                 if password != getpass.getpass('确认密码：'):
                     raise ValueError('两次密码不一致')
-                bootstrap_admin(store, args.username, password)
+                bootstrap_admin(store, args.username, password, args.email)
+            elif args.command == 'bind-email':
+                from backend.services.identity import email
+                with store.transaction() as db:
+                    require_name = args.username.strip().lower()
+                    if not db.execute('SELECT id FROM users WHERE username=?', (require_name,)).fetchone():
+                        raise ValueError('用户不存在')
+                    db.execute('UPDATE users SET email=? WHERE username=?', (email(args.email), require_name))
+                    db.execute('UPDATE sessions SET revoked_at=? WHERE user_id IN (SELECT id FROM users WHERE username=?)', (datetime.now(timezone.utc).isoformat(), require_name))
             elif args.command == 'import-sqlite':
                 from backend.services.channels import ChannelStore
                 ChannelStore(store)

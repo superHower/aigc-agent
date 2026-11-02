@@ -20,6 +20,10 @@ def ledger(tmp_path, request):
     store = request.getfixturevalue('postgres_store') if request.param == 'postgres' else TaskStore(tmp_path/'ledger.db')
     with store.transaction() as db:
         credits.begin(db)
+        # Keep the original ledger unit scenarios in single-credit units.
+        # v7 production pricing (20/16/12/8) is covered by test_v7.py.
+        db.execute("UPDATE membership_plans SET cost=1 WHERE id='ordinary'")
+        db.execute("DELETE FROM system_settings WHERE key='risk_concurrency'")
         db.execute('INSERT INTO users (id,username,password_hash,role,created_at) VALUES (?,?,?,?,?)', ('user', 'user', 'unused', 'user', utc_now()))
         credits.grant(db, 'user', 3, 'trial', 'initial', (datetime.now(timezone.utc)+timedelta(days=7)).isoformat())
     return store
@@ -123,7 +127,9 @@ def test_registration_grant_atomic_and_billed_api(identity_app, monkeypatch):
     from backend.main import app
     store, codes, _ = identity_app
     client, user_id = signup(codes, '13800000009', 'credit_user')
-    assert client.get('/api/account/credits').json()['available'] == 3
+    assert client.get('/api/account/credits').json()['available'] == 0
+    with store.transaction() as db:
+        credits.grant(db, user_id, 60, 'paid', 'api-grant')
     source = image_upload(client)
     class FakeManager:
         async def create_batch(self, task_id, chains, rule):
@@ -133,16 +139,16 @@ def test_registration_grant_atomic_and_billed_api(identity_app, monkeypatch):
             store.finalize_task(task_id)
     monkeypatch.setattr(app.state, 'manager', FakeManager(), raising=False)
     payload = {'source_ids': [source], 'prompt': 'test', 'aspect_ratios': ['original', '1:1']}
-    assert client.post('/api/generate/preview', json=payload).json()['required_credits'] == 2
+    assert client.post('/api/generate/preview', json=payload).json()['required_credits'] == 40
     headers = {'Idempotency-Key': 'create-key'}
     response = client.post('/api/generate/multi-image', json=payload, headers=headers)
     assert response.status_code == 200, response.text
     assert client.post('/api/generate/multi-image', json=payload, headers=headers).json()['task_id'] == response.json()['task_id']
-    assert client.get('/api/account/credits').json()['available'] == 1
+    assert client.get('/api/account/credits').json()['available'] == 20
     assert client.post('/api/generate/multi-image', json={**payload, 'prompt': 'changed'}, headers=headers).status_code == 409
     assert client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'new-request'}).status_code == 402
     with store.transaction() as db:
-        assert db.execute('SELECT COUNT(*) FROM trial_claims WHERE user_id=?', (user_id,)).fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM trial_claims WHERE user_id=?', (user_id,)).fetchone()[0] == 0
         assert db.execute('SELECT COUNT(*) FROM tasks WHERE owner_id=?', (user_id,)).fetchone()[0] == 1
 
 
@@ -150,6 +156,8 @@ def test_same_active_generation_reuses_task_with_new_idempotency_key(identity_ap
     from backend.main import app
     store, codes, _ = identity_app
     client, user_id = signup(codes, '13800000011', 'active_user')
+    with store.transaction() as db:
+        credits.grant(db, user_id, 60, 'paid', 'active-grant')
     source = image_upload(client)
     class ActiveManager:
         async def create_batch(self, task_id, chains, rule):
@@ -167,7 +175,9 @@ def test_same_active_generation_reuses_task_with_new_idempotency_key(identity_ap
 def test_prompt_group_generation_billing_and_snapshot(identity_app, monkeypatch):
     from backend.main import app
     store, codes, _ = identity_app
-    client, _ = signup(codes, '13800000019', 'group_user')
+    client, user_id = signup(codes, '13800000019', 'group_user')
+    with store.transaction() as db:
+        credits.grant(db, user_id, 60, 'paid', 'group-grant')
     source = image_upload(client)
     templates = [client.post('/api/prompt-templates', json={'name': name, 'content': content}).json()
                  for name, content in [('白底', '改成白底'), ('场景', '改成客厅')]]
@@ -183,12 +193,14 @@ def test_prompt_group_generation_billing_and_snapshot(identity_app, monkeypatch)
     payload = {'mode': 'prompt_group', 'source_ids': [source], 'prompt_group_id': group['id']}
     preview = client.post('/api/generate/preview', json=payload)
     assert preview.status_code == 200
-    assert preview.json()['images'] == preview.json()['required_credits'] == 2
+    assert preview.json()['images'] == 2
+    assert preview.json()['required_credits'] == 40
     response = client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'group-create'})
     assert response.status_code == 200, response.text
     task_id = response.json()['task_id']
-    assert response.json()['total_jobs'] == response.json()['required_credits'] == 2
-    assert client.get('/api/account/credits').json()['available'] == 1
+    assert response.json()['total_jobs'] == 2
+    assert response.json()['required_credits'] == 40
+    assert client.get('/api/account/credits').json()['available'] == 20
     assert client.post('/api/generate/multi-image', json=payload, headers={'Idempotency-Key': 'group-create'}).json()['task_id'] == task_id
     detail = client.get(f'/api/task/{task_id}').json()
     assert detail['mode'] == 'prompt_group'

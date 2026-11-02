@@ -20,7 +20,7 @@ def require_idle(db):
         raise ValueError('仍有活动任务；请先等待完成或明确取消，并停止后端进程')
 
 
-def bootstrap_admin(store, username, password):
+def bootstrap_admin(store, username, password, email=None):
     username = username.strip().lower()
     if not re.fullmatch(r'[\u4e00-\u9fffA-Za-z0-9_]{3,24}', username) or username.isdecimal():
         raise ValueError('用户名须为 3–24 位中文、字母、数字或下划线，不能为纯数字')
@@ -35,6 +35,9 @@ def bootstrap_admin(store, username, password):
         user_id = uuid4().hex
         db.execute('INSERT INTO users (id,username,password_hash,role,created_at) VALUES (?,?,?,?,?)',
                    (user_id, username, password_hash, 'admin', utc_now()))
+        if email:
+            from backend.services.identity import email as valid_email
+            db.execute('UPDATE users SET email=? WHERE id=?', (valid_email(email), user_id))
         for table in OWNED:
             db.execute(f'UPDATE {table} SET owner_id = ? WHERE owner_id IS NULL', (user_id,))
         db.execute("UPDATE files SET purpose = 'mask' WHERE id LIKE 'mask_%'")
@@ -153,6 +156,7 @@ def import_sqlite(source: Path, target: TaskStore):
         tables += ['credit_accounts', 'credit_lots', 'trial_claims', 'credit_entries', 'credit_reservations', 'credit_allocations', 'business_requests', 'generation_attempts']
         tables += ['packages', 'membership_entries']
         tables += ['payment_assets', 'payment_codes', 'orders', 'order_evidence', 'payment_receipts', 'order_reviews', 'financial_requests', 'credit_adjustments']
+        tables += ['video_jobs', 'membership_plans', 'subscriptions', 'membership_periods', 'membership_usage']
         available = {r[0] for r in original.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         with target.transaction() as db:
             db.execute('BEGIN')
@@ -165,6 +169,8 @@ def import_sqlite(source: Path, target: TaskStore):
                 if table == 'packages':
                     # Replace only untouched migration suggestions with authoritative source data.
                     db.execute("DELETE FROM packages WHERE id IN ('credits30','credits120','weekly','monthly') AND created_at=? AND updated_at=? AND status='draft'", ('2026-10-29T00:00:00+00:00', '2026-10-29T00:00:00+00:00'))
+                if table == 'membership_plans':
+                    db.execute('DELETE FROM membership_plans')
                 for row in original.execute(f'SELECT * FROM {table}'):
                     values = dict(row)
                     names = list(values)

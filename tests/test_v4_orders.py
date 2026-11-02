@@ -19,6 +19,7 @@ def png():
 
 @pytest.fixture
 def payments(identity_app):
+    pytest.skip('v7 已停用二维码下单与审核流程；人工充值与会员发放见 test_v7.py')
     store, codes, admin_id = identity_app
     admin = TestClient(app)
     assert admin.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200

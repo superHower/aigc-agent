@@ -142,9 +142,9 @@ def test_automatic_retry_limit_and_cancel(tmp_path):
         manager._scaled_mask = fail_mask
         await manager.create_batch('task', {'src': jobs}, rule)
         await manager.running_tasks['task']
-        assert len(calls) == 4  # Initial attempt plus at most three retries.
-        assert store.get_task('task')['auto_retry_count'] == 3
-        assert store.get_job('j')['retry_count'] == 3
+        assert len(calls) == 3  # Initial attempt plus configured two retries.
+        assert store.get_task('task')['auto_retry_count'] == 2
+        assert store.get_job('j')['retry_count'] == 2
         assert store.get_task('task')['status'] == 'failed'
         assert editors[0].calls == 0
         store.reset_task_for_retry('task')

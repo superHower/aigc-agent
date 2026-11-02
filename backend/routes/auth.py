@@ -1,4 +1,4 @@
-"""Cookie sessions and phone verification."""
+"""Email/password authentication with cookie sessions."""
 import hashlib
 import hmac
 import os
@@ -7,10 +7,10 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 from backend.services.passwords import verify_password, DUMMY_HASH
-from backend.services import identity, captcha
+from backend.services import identity
 
 router = APIRouter(prefix='/api/auth', tags=['authentication'])
 
@@ -33,7 +33,7 @@ def account(request):
 
 
 class Login(BaseModel):
-    account: str = Field(min_length=1, max_length=64)
+    account: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=1, max_length=64)
 
 
@@ -53,7 +53,7 @@ def login(payload: Login, request: Request, response: Response):
         raise HTTPException(429, '尝试过多，请稍后重试')
     with store.transaction() as db:
         identity.auth_transaction(db)
-        user = db.execute('SELECT * FROM users WHERE username=? OR phone=?', (payload.account.strip().lower(), payload.account.strip())).fetchone()
+        user = db.execute('SELECT * FROM users WHERE email=?', (payload.account.strip().lower(),)).fetchone()
         valid = verify_password(payload.password, user['password_hash'] if user else DUMMY_HASH)
         if not user or user['disabled'] or not valid:
             raise HTTPException(401, '账号或密码错误')
@@ -85,31 +85,43 @@ class SmsInput(BaseModel):
 
 class Registration(BaseModel):
     username: str
-    phone: str
+    email: str
     password: str = Field(min_length=8, max_length=64)
-    captcha_id: str = Field(min_length=20, max_length=100)
-    code: str = Field(pattern=r'^[A-Za-z0-9]{5}$')
+    confirm: str
+
+    @model_validator(mode='after')
+    def confirmation(self):
+        if self.password != self.confirm:
+            raise ValueError('两次密码不一致')
+        return self
 
     @field_validator('username')
     @classmethod
     def valid_name(cls, value):
         return identity.username(value)
 
-    @field_validator('phone')
+    @field_validator('email')
     @classmethod
     def valid_phone(cls, value):
-        return identity.phone(value)
+        return identity.email(value)
 
 
 class Reset(BaseModel):
-    phone: str
+    email: str
+    old_password: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=8, max_length=64)
-    code: str = Field(pattern=r'^[0-9]{6}$')
+    confirm: str
 
-    @field_validator('phone')
+    @field_validator('email')
     @classmethod
     def valid_phone(cls, value):
-        return identity.phone(value)
+        return identity.email(value)
+
+    @model_validator(mode='after')
+    def confirmation(self):
+        if self.password != self.confirm:
+            raise ValueError('两次密码不一致')
+        return self
 
 
 @router.post('/sms')
@@ -117,20 +129,14 @@ def sms(payload: SmsInput, request: Request):
     raise HTTPException(410, '已改用图形验证码，请刷新页面')
 
 
-@router.get('/captcha')
-def image_captcha(request: Request, response: Response):
-    response.headers['Cache-Control'] = 'no-store'
-    return captcha.issue(request.app.state.store, request.client.host if request.client else 'unknown')
-
-
 @router.post('/register', status_code=201)
 def register(payload: Registration, request: Request):
-    return captcha.register(request.app.state.store, payload.username, payload.phone, payload.password, payload.captcha_id, payload.code)
+    return identity.register_email(request.app.state.store, payload.username, payload.email, payload.password, request.client.host if request.client else 'unknown')
 
 
 @router.post('/reset-password')
 def reset_password(payload: Reset, request: Request):
-    raise HTTPException(403, '请联系管理员核实身份后重置密码')
+    return identity.change_password(request.app.state.store, payload.email, payload.old_password, payload.password, request.client.host if request.client else 'unknown')
 
 
 @router.get('/me')

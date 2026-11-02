@@ -50,8 +50,9 @@ class Verification(Reason):
     amount_cents: int = Field(strict=True, ge=1, le=100000000)
 
 
-class Adjustment(Reason):
-    amount: int = Field(strict=True, ge=-10000000, le=10000000)
+class Adjustment(Input):
+    reason: str = Field(default='客服充值', max_length=1000)
+    amount: int = Field(strict=True, ge=1, le=10000000)
 
     @field_validator('amount')
     @classmethod
@@ -178,6 +179,9 @@ def asset(asset_id: str, request: Request):
     with request.app.state.store.transaction() as db:
         row = db.execute('SELECT * FROM payment_assets WHERE id=?', (asset_id,)).fetchone()
         allowed = row and (actor['role'] == 'admin' or row['owner_id'] == actor['id'])
+        if row and not allowed:
+            setting = db.execute("SELECT value FROM system_settings WHERE key='customer_service_asset'").fetchone()
+            allowed = setting and setting['value'] == asset_id
         if row and not allowed and row['purpose'] == 'payment_code':
             allowed = db.execute('SELECT o.id FROM orders o JOIN payment_codes p ON p.id=o.payment_code_id WHERE o.user_id=? AND p.asset_id=? LIMIT 1', (actor['id'], asset_id)).fetchone()
         if not allowed:

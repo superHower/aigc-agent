@@ -19,7 +19,7 @@ from tests.test_v4_migrations import postgres_store
 @pytest.fixture(params=['sqlite', 'postgres'])
 def identity_app(tmp_path, monkeypatch, request):
     store = request.getfixturevalue('postgres_store') if request.param == 'postgres' else TaskStore(tmp_path / 'identity.db')
-    admin_id = bootstrap_admin(store, 'admin', 'test-password-123')
+    admin_id = bootstrap_admin(store, 'admin', 'test-password-123', 'admin@example.com')
     for directory in ('source', 'masks'):
         (tmp_path / directory).mkdir()
     monkeypatch.setattr(app.state, 'store', store, raising=False)
@@ -40,10 +40,9 @@ def identity_app(tmp_path, monkeypatch, request):
 
 def signup(codes, number, name):
     client = TestClient(app)
-    challenge = client.get('/api/auth/captcha').json()
-    response = client.post('/api/auth/register', json={'username': name, 'phone': number, 'password': 'password-123', 'code': 'ab234', 'captcha_id': challenge['captcha_id']})
+    response = client.post('/api/auth/register', json={'username': name, 'email': number + '@example.com', 'password': 'password-123', 'confirm': 'password-123'})
     assert response.status_code == 201, response.text
-    assert client.post('/api/auth/login', json={'account': number, 'password': 'password-123'}).status_code == 200
+    assert client.post('/api/auth/login', json={'account': number + '@example.com', 'password': 'password-123'}).status_code == 200
     client.headers['X-CSRF-Token'] = client.cookies['csrf']
     return client, response.json()['id']
 
@@ -56,40 +55,17 @@ def image_upload(client, name='image.png'):
     return response.json()['files'][0]['file_id']
 
 
-def test_captcha_expiry_single_attempt_and_single_use(identity_app):
-    store, _, _ = identity_app
-    client = TestClient(app)
-    def challenge():
-        response = client.get('/api/auth/captcha')
-        assert response.headers['cache-control'] == 'no-store'
-        data = response.json()
-        assert data['image'].startswith('data:image/png;base64,') and 'code' not in data
-        return data['captcha_id']
-    payload = {'username': 'user_a', 'phone': '13800000001', 'password': 'password-123', 'code': 'AB234', 'captcha_id': challenge()}
-    assert client.post('/api/auth/register', json={**payload, 'code': 'XXXXX'}).status_code == 400
-    assert client.post('/api/auth/register', json=payload).status_code == 400
-    payload['captcha_id'] = challenge()
-    with store.transaction() as db:
-        db.execute('UPDATE captcha_challenges SET expires_at=?', ((datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),))
-    assert client.post('/api/auth/register', json=payload).status_code == 400
-    payload['captcha_id'] = challenge()
-    assert client.post('/api/auth/register', json=payload).status_code == 201
-    assert client.post('/api/auth/register', json=payload).status_code == 400
-    assert client.post('/api/auth/sms', json={'phone': payload['phone'], 'purpose': 'register'}).status_code == 410
-    assert client.post('/api/auth/reset-password', json={'phone': payload['phone'], 'password': 'new-password', 'code': '123456'}).status_code == 403
-
-
 def test_admin_reset_revokes_sessions_and_audits(identity_app):
     store, codes, _ = identity_app
     user, user_id = signup(codes, '13800000002', 'user_a')
     assert user.post(f'/api/admin/users/{user_id}/reset-password', json={'password': 'new-password-123', 'reason': 'verified'}).status_code == 403
     admin = TestClient(app)
-    assert admin.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200
+    assert admin.post('/api/auth/login', json={'account': 'admin@example.com', 'password': 'test-password-123'}).status_code == 200
     admin.headers['X-CSRF-Token'] = admin.cookies['csrf']
     assert admin.post(f'/api/admin/users/{user_id}/reset-password', json={'password': 'new-password-123', 'reason': 'verified'}).status_code == 200
     assert user.get('/api/auth/me').status_code == 401
-    assert user.post('/api/auth/login', json={'account': 'user_a', 'password': 'password-123'}).status_code == 401
-    assert user.post('/api/auth/login', json={'account': 'user_a', 'password': 'new-password-123'}).status_code == 200
+    assert user.post('/api/auth/login', json={'account': '13800000002@example.com', 'password': 'password-123'}).status_code == 401
+    assert user.post('/api/auth/login', json={'account': '13800000002@example.com', 'password': 'new-password-123'}).status_code == 200
     with store.transaction() as db:
         audit = db.execute("SELECT details FROM audit_logs WHERE action='user_password_reset'").fetchone()
         assert audit and 'password' not in audit[0]
@@ -138,7 +114,7 @@ def test_two_users_isolated_across_files_jobs_zip_ocr_templates_dashboard(identi
     assert bob.post('/api/prompt-templates', json={'name': 'hack', 'content': 'hack', 'category_id': cat_a['id']}).status_code == 404
     assert bob.post('/api/prompt-templates', json={'name': 'hack', 'content': 'hack', 'visibility': 'public'}).status_code == 403
     admin = TestClient(app)
-    assert admin.post('/api/auth/login', json={'account': 'admin', 'password': 'test-password-123'}).status_code == 200
+    assert admin.post('/api/auth/login', json={'account': 'admin@example.com', 'password': 'test-password-123'}).status_code == 200
     admin.headers['X-CSRF-Token'] = admin.cookies['csrf']
     public_category = admin.post('/api/prompt-categories', json={'name': '公共', 'visibility': 'public'}).json()
     public_template = admin.post('/api/prompt-templates', json={'name': 'public', 'content': 'shared', 'visibility': 'public', 'category_id': public_category['id']}).json()
@@ -173,21 +149,3 @@ def test_concurrent_registration_and_failed_sms(identity_app, monkeypatch):
     monkeypatch.setattr(identity, 'send_sms', unavailable)
     response = TestClient(app).post('/api/auth/sms', json={'phone': '13800000006', 'purpose': 'register'})
     assert response.status_code == 410 and 'secret' not in response.text
-
-
-def test_parallel_captcha_registration_and_issue_limit(identity_app):
-    store, _, _ = identity_app
-    client = TestClient(app)
-    challenge = client.get('/api/auth/captcha').json()
-    def register(index):
-        return TestClient(app).post('/api/auth/register', json={
-            'username': 'parallel_' + str(index), 'phone': '1380000002' + str(index),
-            'password': 'password-123', 'captcha_id': challenge['captcha_id'], 'code': 'AB234'}).status_code
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(register, range(2))) == [201, 400]
-    with store.transaction() as db:
-        assert db.execute('SELECT COUNT(*) FROM trial_claims').fetchone()[0] == 1
-        pepper = identity.secret(db)
-        identity.throttle(db, 'captcha:' + identity.keyed(pepper, 'testclient'), limit=60, minutes=5)
-        db.execute("UPDATE auth_limits SET attempts=60 WHERE key LIKE 'captcha:%'")
-    assert client.get('/api/auth/captcha').status_code == 429

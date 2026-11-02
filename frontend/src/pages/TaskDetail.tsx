@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { cancelTask, retryTask, promptError } from '../api/client'
 import { useTaskProgress } from '../hooks/useTaskProgress'
 import { AppHeader } from '../components/AppHeader'
+import { FrozenCreditsNotice } from '../components/FrozenCreditsNotice'
 import { RefineImageButton } from '../components/RefineImageButton'
 
 const colors: Record<string, string> = { completed: 'success', partial_failed: 'warning', failed: 'error', cancelled: 'default', processing: 'processing', pending: 'blue', done: 'success' }
@@ -23,6 +24,7 @@ export function TaskDetail() {
       <Space wrap><Typography.Text code>{current.id}</Typography.Text><Tag color={colors[current.status]}>{current.status}</Tag><Typography.Text>{current.completed_jobs}/{current.total_jobs} 已完成</Typography.Text><Button danger disabled={!active} onClick={() => void cancel()}>取消任务</Button><Button onClick={() => void retry()} disabled={active}>重试失败步骤</Button></Space>
       <Typography.Text>自动重试 {current.auto_retry_count ?? 0} / {current.auto_retry_limit ?? 3} 轮 · 已扣 {current.credit_summary?.settled ?? 0} · 冻结 {current.credit_summary?.frozen ?? 0} · 释放 {current.credit_summary?.released ?? 0} 积分</Typography.Text><Progress percent={Math.round(current.progress * 100)} status={current.status === 'failed' ? 'exception' : current.status === 'completed' ? 'success' : 'active'} />
       {error && <Alert type="error" message={error} />}
+      <FrozenCreditsNotice amount={current.credit_summary?.frozen ?? 0} taskId={current.id} />
     </Card>
     <Card title="原参考图与模型提示词">
       <Row gutter={[24, 24]}>

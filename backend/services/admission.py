@@ -31,8 +31,9 @@ class Admission:
                         continue
                     if capacity.locked():
                         continue
-                    limit = status(self.store, owner, self.ordinary, self.member)['concurrency'] if owner else None
-                    if owner and self.running[owner] >= limit:
+                    configured = self.store_setting('risk_concurrency') if owner else None
+                    limit = (configured or None) if configured is not None else (status(self.store, owner, self.ordinary, self.member)['concurrency'] if owner else None)
+                    if owner and limit and self.running[owner] >= limit:
                         continue
                     eligible.append(candidate)
                 chosen = next((c for c in eligible if c[1] != self.last_user), eligible[0] if eligible else None)
@@ -57,3 +58,8 @@ class Admission:
                     self.running[user_id] -= 1
                     if not self.running[user_id]:
                         del self.running[user_id]
+
+    def store_setting(self, key):
+        with self.store.transaction() as db:
+            row = db.execute('SELECT value FROM system_settings WHERE key=?', (key,)).fetchone()
+        return int(row['value']) if row else None

@@ -202,7 +202,9 @@ class TaskStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             task = connection.execute("SELECT status, auto_retry_count FROM tasks WHERE id = ?", (task_id,)).fetchone()
-            if not task or task["status"] != "running" or task["auto_retry_count"] >= 3:
+            risk = connection.execute("SELECT value FROM system_settings WHERE key='risk_retry_limit'").fetchone()
+            limit = int(risk['value']) if risk else 3
+            if not task or task["status"] != "running" or (limit > 0 and task["auto_retry_count"] >= limit):
                 return False
             count = connection.execute(
                 "UPDATE jobs SET status = 'pending', error = NULL, retry_count = retry_count + 1, updated_at = ? "

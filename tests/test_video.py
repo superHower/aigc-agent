@@ -3,6 +3,9 @@ import json
 
 import httpx
 import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
+from types import SimpleNamespace
 from PIL import Image
 
 from backend.db.task_store import TaskStore, utc_now
@@ -10,6 +13,24 @@ from backend.models.schemas import MultiImageRequest
 from backend.services.channels import ChannelInput, ChannelPool, ChannelStore
 from backend.services.multi_image import plan_multi_image
 from backend.services.task_manager import TaskManager
+
+
+@pytest.mark.parametrize('endpoint_name', ['generate_multi_image', 'generation_preview', 'retry_task'])
+def test_video_requires_admin(endpoint_name, monkeypatch):
+    from backend import main
+    request = Request({'type': 'http', 'headers': []})
+    request.state.user = {'id': 'ordinary', 'role': 'user'}
+    monkeypatch.setattr(main, 'state', lambda _: SimpleNamespace())
+    monkeypatch.setattr(main, 'require_task', lambda *_: {'edit_rule': '{"generation_kind":"video"}'})
+    async def run():
+        with pytest.raises(HTTPException) as exc:
+            if endpoint_name == 'retry_task':
+                from backend.models.schemas import RetryRequest
+                await main.retry_task('task', RetryRequest(), request)
+            else:
+                await getattr(main, endpoint_name)(payload(), request)
+        assert exc.value.status_code == 403
+    asyncio.run(run())
 
 
 def payload(**updates):

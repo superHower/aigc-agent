@@ -19,7 +19,7 @@ export function Login() {
         catch (reason) { setError(promptError(reason)) }
         finally { setBusy(false) }
       }}>
-        <Form.Item name="account" label="用户名 / 手机号" rules={[{ required: true }]}><Input autoComplete="username" /></Form.Item>
+        <Form.Item name="account" label="邮箱" rules={[{ required: true }, { type: 'email' }]}><Input autoComplete="email" maxLength={254} /></Form.Item>
         <Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
         <Button block type="primary" htmlType="submit" loading={busy}>登录</Button>
       </Form>

@@ -136,6 +136,6 @@ def readiness(request: Request):
     import os
     require_admin(request)
     with request.app.state.store.transaction() as db:
-        active_packages = db.execute("SELECT COUNT(*) FROM packages WHERE status='active'").fetchone()[0]
-        code = bool(db.execute('SELECT id FROM payment_codes WHERE active=1').fetchone())
-    return {'database': 'postgresql' if request.app.state.store.postgres else 'sqlite', 'verification_mode': '图形 CAPTCHA', 'secure_cookie': os.getenv('COOKIE_SECURE', 'false').lower() == 'true', 'active_packages': active_packages, 'payment_code_active': code, 'executor': 'single_process', 'external_acceptance': '收款账户核对、HTTPS 和备份恢复演练需操作者验收；配置状态不代表验收通过。'}
+        active_packages = db.execute('SELECT COUNT(*) FROM membership_plans').fetchone()[0]
+        code = bool(db.execute("SELECT value FROM system_settings WHERE key='customer_service_asset'").fetchone())
+    return {'database': 'postgresql' if request.app.state.store.postgres else 'sqlite', 'verification_mode': '邮箱与密码', 'secure_cookie': os.getenv('COOKIE_SECURE', 'false').lower() == 'true', 'active_packages': active_packages, 'customer_service_configured': code, 'executor': 'single_process', 'external_acceptance': '客服人工充值；请验收 HTTPS 与备份恢复。'}
