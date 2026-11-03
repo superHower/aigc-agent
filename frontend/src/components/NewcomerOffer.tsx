@@ -4,7 +4,7 @@ import { api, promptError } from '../api/client'
 
 export type NewcomerPromotion = {
   eligible: boolean; deadline: string; server_now: string; reserved: boolean; original_price_cents: number
-  plan: { name: string; price_cents: number; credits: number; cost: number; duration_hours: number }
+  plan: { id: string; name: string; price_cents: number; credits: number; cost: number; duration_hours: number }
 }
 
 export function NewcomerOffer({ offer, serviceUrl }: { offer?: NewcomerPromotion; serviceUrl?: string | null }) {
@@ -26,12 +26,12 @@ export function NewcomerOffer({ offer, serviceUrl }: { offer?: NewcomerPromotion
   const countdown = [Math.floor(remaining / 3600), Math.floor(remaining % 3600 / 60), remaining % 60].map(n => String(n).padStart(2, '0')).join(':')
   async function purchase() {
     setBusy(true); setError('')
-    try { await api.post('/recharge/newcomer/reserve'); setContact(true) }
+    try { await api.post('/recharge/newcomer/reserve', null, { params: { plan_id: plan.id } }); setContact(true) }
     catch (e) { setError(promptError(e)) }
     finally { setBusy(false) }
   }
   const content = <>
-    <Typography.Title level={3}>仅需 ￥{plan.price_cents / 100} 体验原价 {offer.original_price_cents / 100} 元的月卡特权！</Typography.Title>
+    <Typography.Title level={3}>{plan.name} · ￥{plan.price_cents / 100}</Typography.Title>
     <Typography.Paragraph>立即到账 {plan.credits.toLocaleString()} 积分（可做 {Math.floor(plan.credits / plan.cost)} 张图），{plan.duration_hours / 24} 天内享受 {plan.cost} 积分/张的超低折扣！</Typography.Paragraph>
     <Statistic title="优惠倒计时，结束后恢复原价" value={countdown} />
     <Typography.Paragraph type="secondary">限新用户首单，终身限购 1 次。付款经客服核实开通后，积分立即到账，有效期 {plan.duration_hours} 小时，未使用的赠送积分到期作废。</Typography.Paragraph>

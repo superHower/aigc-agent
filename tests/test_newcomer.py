@@ -30,7 +30,7 @@ def test_activation_snapshot_expiration_and_once_only(setup):
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert all(r['reserved'] for r in pool.map(reserve, range(2)))
     with store.transaction() as db:
-        assert db.execute('SELECT COUNT(*) FROM newcomer_claims').fetchone()[0] == 1
+        assert db.execute('SELECT COUNT(*) FROM newcomer_plan_claims').fetchone()[0] == 1
         db.execute("UPDATE membership_plans SET cost=99,credits=1,duration_hours=1 WHERE id='newcomer'")
     url = f'/api/admin/users/{ident}/membership'
     headers = {'Idempotency-Key': 'newcomer-activation'}

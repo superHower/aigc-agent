@@ -7,7 +7,7 @@ import { NewcomerOffer, type NewcomerPromotion } from '../components/NewcomerOff
 
 type Entry = { id: string; event: string; available_delta: number; frozen_delta: number; created_at: string }
 type Lot = { id: string; source: string; available: number; frozen: number; expires_at: string | null }
-export type Plan = { id: string; name: string; cost: number; price_cents: number; credits: number; duration_hours: number; image_limit: number; total_limit: number; risk_limit: number }
+export type Plan = { id: string; name: string; cost: number; price_cents: number; credits: number; duration_hours: number; newcomer_only: boolean; image_limit: number; total_limit: number; risk_limit: number }
 export const issuance = (id: string) => ({ ordinary: '无', weekly: '立即到账，会员期内有效', monthly: '立即到账，会员期内有效', quarterly: '立即到账，会员期内有效' }[id] ?? '')
 const labels: Record<string, string> = { grant: '发放', freeze: '冻结', settle: '成功扣费', release: '释放', expire: '到期', adjust: '管理员调整' }
 const sources: Record<string, string> = { membership: '会员赠送积分', paid: '通用积分包', adjustment: '客服充值通用积分', trial: '注册 / 体验赠送积分' }
@@ -16,7 +16,7 @@ export function Credits() {
   const [entries, setEntries] = useState<Entry[]>([])
   const [offset, setOffset] = useState(0)
   const [error, setError] = useState('')
-  const [recharge, setRecharge] = useState<{ plans: Plan[]; current_plan: Plan; expires_at: string | null; customer_service_url: string | null; newcomer_offer: NewcomerPromotion }>()
+  const [recharge, setRecharge] = useState<{ plans: Plan[]; current_plan: Plan; expires_at: string | null; customer_service_url: string | null; newcomer_offer: NewcomerPromotion; newcomer_offers: NewcomerPromotion[] }>()
   useEffect(() => {
     Promise.all([api.get('/account/credits'), api.get('/account/credit-entries', { params: { offset, limit: 50 } }), api.get('/recharge')]).then(([account, ledger, center]) => {
       setBalance(account.data); setEntries(ledger.data.items); setRecharge(center.data); setError('')
@@ -25,7 +25,7 @@ export function Credits() {
   return <div className="app-shell"><AppHeader /><main className="workspace-content"><Space direction="vertical" className="page-stack" size="large">
     {error && <Alert type="error" message={error} />}
     <FrozenCreditsNotice amount={balance?.frozen ?? 0} />
-    <NewcomerOffer offer={recharge?.newcomer_offer} serviceUrl={recharge?.customer_service_url} />
+    {recharge?.newcomer_offers.map(offer => <NewcomerOffer key={offer.plan.id} offer={offer} serviceUrl={recharge?.customer_service_url} />)}
     <Card title="充值中心" loading={!balance}>
       <div className="recharge-layout">
         <div className="recharge-summary">

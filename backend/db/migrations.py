@@ -326,6 +326,20 @@ def migrate(store):
                 created_at TEXT NOT NULL, activated_at TEXT
             )''')
             stamp(db, 14)
+        if 15 not in applied:
+            db.execute('ALTER TABLE membership_plans ADD COLUMN newcomer_only INTEGER NOT NULL DEFAULT 0 CHECK(newcomer_only IN (0,1))')
+            db.execute("UPDATE membership_plans SET newcomer_only=1 WHERE id='newcomer'")
+            db.execute('''CREATE TABLE newcomer_plan_claims (
+                user_id TEXT NOT NULL REFERENCES users(id), plan_id TEXT NOT NULL,
+                snapshot TEXT NOT NULL, created_at TEXT NOT NULL, activated_at TEXT,
+                PRIMARY KEY(user_id,plan_id)
+            )''')
+            import json
+            for claim in db.execute('SELECT * FROM newcomer_claims').fetchall():
+                snapshot = json.loads(claim['snapshot'])
+                snapshot['newcomer_only'] = 1
+                db.execute('INSERT INTO newcomer_plan_claims VALUES (?,?,?,?,?)', (claim['user_id'], snapshot['id'], json.dumps(snapshot), claim['created_at'], claim['activated_at']))
+            stamp(db, 15)
 
 
 def stamp(db, version):

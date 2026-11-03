@@ -39,9 +39,10 @@ def assign(db, user_id, plan_id):
     if not plan:
         raise HTTPException(404, '套餐不存在')
     now = datetime.now(timezone.utc)
-    if plan_id == 'newcomer':
+    claim = db.execute('SELECT activated_at FROM newcomer_plan_claims WHERE user_id=? AND plan_id=?', (user_id, plan_id)).fetchone()
+    if plan['newcomer_only'] or claim:
         from backend.services.newcomer import activate
-        plan = activate(db, user_id)
+        plan = activate(db, user_id, plan_id)
     # A change replaces the previous membership and invalidates its unused benefits.
     db.execute('UPDATE subscriptions SET cancelled_at=? WHERE user_id=? AND cancelled_at IS NULL', (now.isoformat(), user_id))
     db.execute("UPDATE credit_lots SET expires_at=? WHERE user_id=? AND source='membership' AND (expires_at>? OR expires_at IS NULL)", (now.isoformat(), user_id, now.isoformat()))

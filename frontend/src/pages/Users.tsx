@@ -10,6 +10,8 @@ type Action = 'credit' | 'membership' | 'email' | 'status' | 'password'
 const titles = { credit: '充值积分', membership: '设置会员', email: '绑定邮箱', status: '更改用户状态', password: '重置密码' }
 export function Users() {
   const [items, setItems] = useState<User[]>([])
+  const [plans, setPlans] = useState<{ id: string; name: string; newcomer_only: boolean }[]>([])
+  useEffect(() => { api.get('/admin/membership-plans').then(r => setPlans(r.data.items)).catch(e => setError(promptError(e))) }, [])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
@@ -43,7 +45,7 @@ export function Users() {
       { title: '可用积分', dataIndex: 'available' }, { title: '冻结', dataIndex: 'frozen' }, { title: '操作', render: (_, row: User) => <Space wrap><Button onClick={() => open(row, 'credit')}>充值积分</Button><Button onClick={() => open(row, 'membership')}>设置会员</Button><Button onClick={() => open(row, 'email')}>绑定邮箱</Button>{row.role !== 'admin' && <><Button onClick={() => open(row, 'status')}>{row.disabled ? '启用' : '禁用'}</Button><Button onClick={() => open(row, 'password')}>重置密码</Button></>}</Space> },
     ]} /></Card><Modal title={`${selected?.email ?? selected?.username ?? ''} · ${titles[action]}`} open={!!selected} onCancel={() => setSelected(undefined)} onOk={() => void save()} confirmLoading={busy}><Form form={form} layout="vertical">
       {action === 'credit' && <><Alert type="info" message="充值为永久通用积分，1 元=100 积分。请确认上方邮箱。" /><Form.Item name="amount" label="充值积分" rules={[{ required: true }]}><InputNumber min={1} max={10000000} precision={0} /></Form.Item></>}
-      {action === 'membership' && <><Alert type="warning" message="立即替换当前会员，旧会员未用赠送积分作废。通用积分保留。新人体验卡请先核实付款，系统将校验锁定资格、首单及终身限购规则。" /><Form.Item name="plan_id" label="套餐" rules={[{ required: true }]}><Select options={[{ value: 'ordinary', label: '普通' }, { value: 'weekly', label: '周卡' }, { value: 'monthly', label: '月卡' }, { value: 'quarterly', label: '季卡' }, { value: 'newcomer', label: '新人 3 天体验卡（核实付款后开通）' }]} /></Form.Item></>}
+      {action === 'membership' && <><Alert type="warning" message="立即替换当前会员，旧会员未用赠送积分作废。通用积分保留。新人体验卡请先核实付款，系统将校验锁定资格、首单及终身限购规则。" /><Form.Item name="plan_id" label="套餐" rules={[{ required: true }]}><Select options={plans.map(p => ({ value: p.id, label: p.name + (p.newcomer_only ? ' (new)' : '') }))} /></Form.Item></>}
       {action === 'email' && <Form.Item name="email" label="登录邮箱（修改后该用户需重新登录）" rules={[{ required: true }, { type: 'email' }]}><Input maxLength={254} /></Form.Item>}
       {action === 'password' && <Form.Item name="password" label="新密码" rules={[{ required: true, min: 8, max: 64 }]}><Input.Password autoComplete="new-password" /></Form.Item>}
       {(action === 'status' || action === 'password') && <Form.Item name="reason" label="原因" rules={[{ required: true, whitespace: true, max: 500 }]}><Input.TextArea /></Form.Item>}
