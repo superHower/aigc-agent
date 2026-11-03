@@ -30,9 +30,8 @@ def offer(db, user_id, plan_id=None):
     eligible = user['role'] == 'user' and datetime.now(timezone.utc) < deadline and first_purchase(db, user_id) and not (claim and claim['activated_at'])
     eligible = eligible and bool(selected['newcomer_only'] or claim)
     plan = json.loads(claim['snapshot']) if claim else dict(selected)
-    monthly = db.execute("SELECT price_cents FROM membership_plans WHERE id='monthly'").fetchone()
     return {'eligible': eligible, 'deadline': deadline.isoformat(), 'server_now': utc_now(),
-            'reserved': bool(claim), 'plan': plan, 'original_price_cents': monthly['price_cents'] if monthly else selected['price_cents']}
+            'reserved': bool(claim), 'plan': plan, 'original_price_cents': selected['price_cents']}
 
 
 def reserve(db, user_id, plan_id=None):

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Brand } from '../components/Brand'
 import { Link, useNavigate } from 'react-router-dom'
 import { Alert, Button, Card, Form, Input, Typography } from 'antd'
 import { api, promptError } from '../api/client'
@@ -8,6 +9,7 @@ export function PhoneAuth({ reset = false }: { reset?: boolean }) {
   const [busy, setBusy] = useState(false)
   const navigate = useNavigate()
   return <main className="auth-page"><Card>
+    <div className="auth-brand"><Brand /></div>
     <Typography.Title level={2}>{reset ? '修改密码' : '注册账号'}</Typography.Title>
     {!reset && <Typography.Paragraph>注册即赠 500 积分，登录后立即可用。注册 24 小时内可在充值中心领取新人体验卡优惠。</Typography.Paragraph>}
     {reset && <Typography.Paragraph type="secondary">输入邮箱和原密码以修改密码。忘记原密码请联系管理员。</Typography.Paragraph>}

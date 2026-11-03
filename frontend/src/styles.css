@@ -129,16 +129,6 @@ body {
 .brand-mark:hover {
   color: var(--text-primary);
 }
-.brand-symbol {
-  display: grid;
-  place-items: center;
-  width: 29px;
-  height: 29px;
-  border-radius: 8px;
-  color: #000;
-  background: var(--accent);
-  font-size: 16px;
-}
 .brand-mark {
   display: inline-flex;
   align-items: center;
@@ -217,6 +207,17 @@ body {
 .newcomer-offer.ant-card { border-color: var(--accent); background: linear-gradient(120deg, var(--accent-soft), var(--surface)); }
 .newcomer-offer .ant-statistic, .newcomer-modal .ant-statistic { margin-bottom: 16px; }
 .newcomer-contact { margin-top: 20px; }
+.credit-breakdown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 24px; }
+.credit-bucket { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 10px; }
+.credit-bucket-permanent { border-color: #154536; background: #0b251c; }
+.credit-bucket-membership { border-color: #5a4321; background: #2c2110; }
+.credit-bucket .ant-statistic-content { font-size: 32px; font-weight: 600; }
+.credit-bucket p { margin: 12px 0 8px; }
+.credit-bucket small { color: var(--text-muted); }
+.account-popover .credit-breakdown { grid-template-columns: 1fr; gap: 8px; margin: 12px 0; }
+.account-popover .credit-bucket { padding: 12px; }
+.account-popover .credit-bucket .ant-statistic-content { font-size: 24px; }
+@media (max-width: 600px) { .credit-breakdown { grid-template-columns: 1fr; } }
 .file-tabs {
   margin: 16px 0;
 }
@@ -770,7 +771,6 @@ body {
 ::selection { color: #000; background: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .app-nav-link, .admin-sidebar-link { border-radius: 4px; }
-.brand-symbol { border-radius: 4px; }
 .marker span { color: #000; }
 .uploaded-item { color: var(--text-secondary); }
 .uploaded-item-remove { color: var(--text-primary); border: 1px solid #555; }
@@ -784,6 +784,25 @@ body {
 .auth-page { width: 100%; max-width: 460px; margin: 10vh auto; padding: 24px; }
 .auth-page .ant-card { border-top: 2px solid var(--accent); }
 .auth-page h2.ant-typography { font-weight: 500; letter-spacing: 0.02em; }
+.brand-identity { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; line-height: 1; }
+/* Crop the transparent margins without stretching the original artwork. */
+.brand-title-image { display: block; position: relative; width: 104px; height: 44px; overflow: hidden; flex-shrink: 0; }
+.brand-title-image img { position: absolute; width: 125px; height: auto; max-width: none; left: -10px; top: -12px; }
+.brand-subtitle { color: var(--text-secondary); font-size: 12px; font-weight: 400; letter-spacing: 0.04em; }
+.brand-mobile-icon { display: none; object-fit: contain; }
+.brand-icon { display: inline-block; object-fit: contain; flex-shrink: 0; vertical-align: middle; }
+.auth-brand { display: flex; justify-content: center; margin: 0 0 24px; }
+.auth-brand .brand-identity { flex-direction: column; gap: 8px; }
+.auth-brand .brand-title-image { width: 160px; height: 70px; }
+.auth-brand .brand-title-image img { width: 200px; left: -16px; top: -19px; }
+.dashboard-brand-welcome, .branded-card-title { display: inline-flex; align-items: center; gap: 10px; }
+.dashboard-brand-welcome .brand-icon { width: 28px; height: 28px; }
+.branded-card-title .brand-icon { width: 26px; height: 26px; }
+.brand-loading { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; color: var(--text-secondary); background: var(--surface); }
+@media (max-width: 720px) {
+  .brand-responsive .brand-title-image, .brand-responsive .brand-subtitle { display: none; }
+  .brand-responsive .brand-mobile-icon { display: block; }
+}
 @media (max-width: 480px) {
   .auth-page { margin: 5vh auto; padding: 16px; }
 }

@@ -340,6 +340,15 @@ def migrate(store):
                 snapshot['newcomer_only'] = 1
                 db.execute('INSERT INTO newcomer_plan_claims VALUES (?,?,?,?,?)', (claim['user_id'], snapshot['id'], json.dumps(snapshot), claim['created_at'], claim['activated_at']))
             stamp(db, 15)
+        if 16 not in applied:
+            db.execute('ALTER TABLE membership_plans ADD COLUMN duration_days INTEGER NOT NULL DEFAULT 0')
+            db.execute("UPDATE membership_plans SET duration_days=CASE WHEN duration_hours>0 THEN CAST((duration_hours+23)/24 AS INTEGER) WHEN id='weekly' THEN 7 WHEN id='monthly' THEN 30 WHEN id='quarterly' THEN 90 ELSE 0 END")
+            import json
+            for claim in db.execute('SELECT * FROM newcomer_plan_claims').fetchall():
+                snapshot = json.loads(claim['snapshot'])
+                snapshot['duration_days'] = max(1, (snapshot.get('duration_hours', 72) + 23) // 24)
+                db.execute('UPDATE newcomer_plan_claims SET snapshot=? WHERE user_id=? AND plan_id=?', (json.dumps(snapshot), claim['user_id'], claim['plan_id']))
+            stamp(db, 16)
 
 
 def stamp(db, version):

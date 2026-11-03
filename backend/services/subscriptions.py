@@ -1,5 +1,4 @@
 """Immediate membership benefits, immutable pricing snapshots and expiry."""
-import calendar
 import json
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -7,13 +6,6 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from backend.db.task_store import utc_now
-
-
-def add_months(value, months):
-    month = value.month - 1 + months
-    year = value.year + month // 12
-    month = month % 12 + 1
-    return value.replace(year=year, month=month, day=min(value.day, calendar.monthrange(year, month)[1]))
 
 
 def current(db, user_id):
@@ -43,6 +35,8 @@ def assign(db, user_id, plan_id):
     if plan['newcomer_only'] or claim:
         from backend.services.newcomer import activate
         plan = activate(db, user_id, plan_id)
+    if plan_id != 'ordinary' and plan['duration_days'] <= 0:
+        raise HTTPException(422, '请设置套餐有效天数')
     # A change replaces the previous membership and invalidates its unused benefits.
     db.execute('UPDATE subscriptions SET cancelled_at=? WHERE user_id=? AND cancelled_at IS NULL', (now.isoformat(), user_id))
     db.execute("UPDATE credit_lots SET expires_at=? WHERE user_id=? AND source='membership' AND (expires_at>? OR expires_at IS NULL)", (now.isoformat(), user_id, now.isoformat()))
@@ -50,8 +44,7 @@ def assign(db, user_id, plan_id):
     if plan_id == 'ordinary':
         db.execute('UPDATE users SET membership_expires_at=NULL WHERE id=?', (user_id,))
         return None
-    count = 3 if plan_id == 'quarterly' else 1
-    end = now + timedelta(hours=plan['duration_hours']) if plan['duration_hours'] else (now + timedelta(days=7) if plan_id == 'weekly' else add_months(now, count))
+    end = now + timedelta(days=plan['duration_days'])
     ident = uuid4().hex
     db.execute('INSERT INTO subscriptions VALUES (?,?,?,?,?,?,NULL,?)', (ident, user_id, plan_id, json.dumps(dict(plan)), now.isoformat(), end.isoformat(), now.isoformat()))
     # Membership benefits are granted in full immediately and expire with the membership.

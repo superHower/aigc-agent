@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Brand } from '../components/Brand'
 import { Alert, Button, Card, Form, Input, Typography } from 'antd'
 import { api, promptError } from '../api/client'
 import { Link, useLocation } from 'react-router-dom'
@@ -9,7 +10,8 @@ export function Login() {
   const [busy, setBusy] = useState(false)
   return <main className="auth-page">
     <Card>
-      <Typography.Title level={2}>AI 生图</Typography.Title>
+      <div className="auth-brand"><Brand /></div>
+      <Typography.Title level={2}>登录青柚</Typography.Title>
       <Typography.Paragraph type="secondary">登录后管理自己的图片、任务和模板。</Typography.Paragraph>
       {location.state?.notice && <Alert type="success" message={location.state.notice} />}
       {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}

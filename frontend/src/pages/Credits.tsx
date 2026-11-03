@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Card, Empty, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { api, promptError } from '../api/client'
 import { AppHeader } from '../components/AppHeader'
+import { BrandIcon } from '../components/Brand'
 import { FrozenCreditsNotice } from '../components/FrozenCreditsNotice'
+import { CreditBreakdown } from '../components/CreditBreakdown'
 import { NewcomerOffer, type NewcomerPromotion } from '../components/NewcomerOffer'
 
 type Entry = { id: string; event: string; available_delta: number; frozen_delta: number; created_at: string }
 type Lot = { id: string; source: string; available: number; frozen: number; expires_at: string | null }
-export type Plan = { id: string; name: string; cost: number; price_cents: number; credits: number; duration_hours: number; newcomer_only: boolean; image_limit: number; total_limit: number; risk_limit: number }
+export type Plan = { id: string; name: string; cost: number; price_cents: number; credits: number; duration_days: number; newcomer_only: boolean; image_limit: number; total_limit: number; risk_limit: number }
 export const issuance = (id: string) => ({ ordinary: '无', weekly: '立即到账，会员期内有效', monthly: '立即到账，会员期内有效', quarterly: '立即到账，会员期内有效' }[id] ?? '')
 const labels: Record<string, string> = { grant: '发放', freeze: '冻结', settle: '成功扣费', release: '释放', expire: '到期', adjust: '管理员调整' }
 const sources: Record<string, string> = { membership: '会员赠送积分', paid: '通用积分包', adjustment: '客服充值通用积分', trial: '注册 / 体验赠送积分' }
@@ -26,9 +28,10 @@ export function Credits() {
     {error && <Alert type="error" message={error} />}
     <FrozenCreditsNotice amount={balance?.frozen ?? 0} />
     {recharge?.newcomer_offers.map(offer => <NewcomerOffer key={offer.plan.id} offer={offer} serviceUrl={recharge?.customer_service_url} />)}
-    <Card title="充值中心" loading={!balance}>
+    <Card title={<span className="branded-card-title"><BrandIcon />充值中心</span>} loading={!balance}>
       <div className="recharge-layout">
         <div className="recharge-summary">
+          <CreditBreakdown lots={balance?.lots} loading={!balance} />
           <Space size="large" wrap>
             <Statistic title="可用积分" value={balance?.available ?? 0} />
             <Statistic title="任务冻结" value={balance?.frozen ?? 0} />
@@ -37,8 +40,6 @@ export function Credits() {
           </Space>
           <div className="recharge-topup-callout"><Typography.Text>积分可以随时充值</Typography.Text><strong>1 元 = 100 积分</strong></div>
           <Typography.Paragraph>会员到期：{recharge?.expires_at ? new Date(recharge.expires_at).toLocaleString() : '未开通'}</Typography.Paragraph>
-          <Typography.Paragraph>开通会员后，赠送积分立即全额到账，会员期内有效，到期未使用部分自动作废。会员积分用完可直接充值，通用积分永久有效。</Typography.Paragraph>
-          <Typography.Paragraph type="secondary">优先扣除最早到期的会员积分，再扣通用积分。自动重试不额外扣费，失败或取消释放冻结积分。</Typography.Paragraph>
         </div>
         <div className="recharge-service"><Typography.Title level={4}>联系客服微信</Typography.Title><Typography.Paragraph type="secondary">充值、开通会员或有任何问题，请添加客服微信。</Typography.Paragraph>{recharge?.customer_service_url ? <img src={recharge.customer_service_url} alt="客服微信二维码" /> : <Alert type="info" message="客服微信图片暂未配置，请联系管理员。" />}</div>
       </div>
@@ -55,6 +56,7 @@ export function Credits() {
             <div><dt>每张消耗</dt><dd>{plan.cost.toLocaleString()} <span>积分 / 张</span></dd></div>
             <div><dt>赠送积分</dt><dd>{plan.credits.toLocaleString()} <span>积分</span></dd></div>
             <div className="plan-output"><dt>预计可做</dt><dd>{plan.cost ? Math.floor(plan.credits / plan.cost).toLocaleString() : 0} <span>张图</span></dd></div>
+            <div><dt>套餐内不额外充值</dt><dd>{Math.floor(plan.credits / plan.cost) > 0 ? `约 ¥${(plan.price_cents / 100 / Math.floor(plan.credits / plan.cost)).toFixed(4)}` : '—'} <span>/ 张</span></dd></div>
           </dl>
         </article>)}
       </div>

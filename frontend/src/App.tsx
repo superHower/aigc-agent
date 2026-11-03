@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 import { Prompts } from './pages/Prompts'
 import { Channels } from './pages/Channels'
 import { lazy, Suspense } from 'react'
-import { Spin } from 'antd'
+import { BrandLoading } from './components/Brand'
 import { Login } from './pages/Login'
 import { PhoneAuth } from './pages/PhoneAuth'
 import { Credits } from './pages/Credits'
@@ -20,7 +20,7 @@ const Dashboard = lazy(() =>
 const Operations = lazy(() => import('./pages/Operations').then(m => ({ default: m.Operations })))
 const OperationRecords = lazy(() => import('./pages/Operations').then(m => ({ default: m.OperationRecords })))
 function Home() {
-  return <Suspense fallback={<Spin fullscreen />}><Dashboard /></Suspense>
+  return <Suspense fallback={<BrandLoading />}><Dashboard /></Suspense>
 }
 function AppFrame({ children }: { children: ReactNode }) {
   const { user } = useAuth()
@@ -49,10 +49,10 @@ export function App() {
         <Route path="/account/membership" element={<Navigate to="/account/recharge" replace />} />
         <Route path="/orders/*" element={<Navigate to="/account/recharge" replace />} />
         <Route element={<RequireAuth admin />}>
-          <Route path="/admin" element={<Suspense fallback={<Spin fullscreen />}><Operations /></Suspense>} />
+          <Route path="/admin" element={<Suspense fallback={<BrandLoading />}><Operations /></Suspense>} />
           <Route path="/admin/users" element={<Users />} />
-          <Route path="/admin/audit" element={<Suspense fallback={<Spin fullscreen />}><OperationRecords /></Suspense>} />
-          <Route path="/admin/attempts" element={<Suspense fallback={<Spin fullscreen />}><OperationRecords attempts /></Suspense>} />
+          <Route path="/admin/audit" element={<Suspense fallback={<BrandLoading />}><OperationRecords /></Suspense>} />
+          <Route path="/admin/attempts" element={<Suspense fallback={<BrandLoading />}><OperationRecords attempts /></Suspense>} />
           <Route path="/admin/orders" element={<Navigate to="/admin/users" replace />} />
           <Route path="/admin/payment-settings" element={<Navigate to="/admin/packages" replace />} />
         </Route>

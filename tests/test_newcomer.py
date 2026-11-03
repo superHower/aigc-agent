@@ -31,7 +31,7 @@ def test_activation_snapshot_expiration_and_once_only(setup):
         assert all(r['reserved'] for r in pool.map(reserve, range(2)))
     with store.transaction() as db:
         assert db.execute('SELECT COUNT(*) FROM newcomer_plan_claims').fetchone()[0] == 1
-        db.execute("UPDATE membership_plans SET cost=99,credits=1,duration_hours=1 WHERE id='newcomer'")
+        db.execute("UPDATE membership_plans SET cost=99,credits=1,duration_days=1 WHERE id='newcomer'")
     url = f'/api/admin/users/{ident}/membership'
     headers = {'Idempotency-Key': 'newcomer-activation'}
     assert user.post(url, json={'plan_id': 'newcomer'}, headers=headers).status_code == 403
@@ -75,9 +75,9 @@ def test_first_purchase_enforced_even_after_reservation(setup, existing):
 def test_backend_configuration_and_permissions(setup):
     _, admin, user, _ = setup
     plan = next(p for p in admin.get('/api/admin/membership-plans').json()['items'] if p['id'] == 'newcomer')
-    assert (plan['price_cents'], plan['credits'], plan['cost'], plan['duration_hours']) == (1500, 1200, 12, 72)
+    assert (plan['price_cents'], plan['credits'], plan['cost'], plan['duration_days']) == (1500, 1200, 12, 3)
     payload = {k: v for k, v in plan.items() if k != 'id'}
     assert user.put('/api/admin/membership-plans/newcomer', json=payload).status_code == 403
-    assert admin.put('/api/admin/membership-plans/newcomer', json=payload | {'duration_hours': 0}).status_code == 422
-    assert admin.put('/api/admin/membership-plans/newcomer', json=payload | {'duration_hours': 48}).status_code == 200
-    assert user.get('/api/recharge').json()['newcomer_offer']['plan']['duration_hours'] == 48
+    assert admin.put('/api/admin/membership-plans/newcomer', json=payload | {'duration_days': 0}).status_code == 422
+    assert admin.put('/api/admin/membership-plans/newcomer', json=payload | {'duration_days': 2}).status_code == 200
+    assert user.get('/api/recharge').json()['newcomer_offer']['plan']['duration_days'] == 2

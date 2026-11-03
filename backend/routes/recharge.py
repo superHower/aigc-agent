@@ -38,7 +38,7 @@ def save_risk(payload: RiskInput, request: Request):
 
 
 def plans(db):
-    return [dict(r) for r in db.execute("SELECT id,name,cost,price_cents,credits,duration_hours,newcomer_only FROM membership_plans ORDER BY cost DESC")]
+    return [dict(r) for r in db.execute("SELECT id,name,cost,price_cents,credits,duration_days,newcomer_only FROM membership_plans ORDER BY cost DESC")]
 
 
 @router.get('/api/recharge')
@@ -81,7 +81,7 @@ class PlanInput(BaseModel):
     cost: int = Field(strict=True, ge=1, le=100000)
     price_cents: int = Field(strict=True, ge=0, le=100000000)
     credits: int = Field(strict=True, ge=0, le=10000000)
-    duration_hours: int = Field(default=0, strict=True, ge=0, le=8760)
+    duration_days: int = Field(default=0, strict=True, ge=0, le=3650)
     newcomer_only: bool = False
     image_limit: int = Field(default=0, strict=True, ge=0, le=0)
     total_limit: int = Field(default=0, strict=True, ge=0, le=0)
@@ -91,7 +91,7 @@ class PlanInput(BaseModel):
 def validate_plan(plan_id: str, payload: PlanInput):
     if not re.fullmatch(r'[a-z][a-z0-9_-]{1,49}', plan_id):
         raise HTTPException(422, '套餐标识只能使用小写字母、数字、下划线或短横线')
-    if payload.newcomer_only and (not payload.duration_hours or not payload.price_cents or not payload.credits):
+    if payload.newcomer_only and (not payload.duration_days or not payload.price_cents or not payload.credits):
         raise HTTPException(422, '新人体验卡的价格、积分和有效期必须大于0')
 
 
@@ -106,7 +106,7 @@ def update_plan(plan_id: str, payload: PlanInput, request: Request):
         validate_plan(plan_id, payload)
         if plan_id == 'ordinary' and payload.newcomer_only:
             raise HTTPException(422, '普通套餐不能设置为新人专享')
-        if plan_id not in ('ordinary', 'weekly', 'monthly', 'quarterly') and not payload.duration_hours:
+        if plan_id != 'ordinary' and not payload.duration_days:
             raise HTTPException(422, '请设置套餐有效期')
         values = payload.model_dump()
         values['newcomer_only'] = int(payload.newcomer_only)
@@ -119,7 +119,7 @@ def update_plan(plan_id: str, payload: PlanInput, request: Request):
 def create_plan(plan_id: str, payload: PlanInput, request: Request):
     actor = require_admin(request)
     validate_plan(plan_id, payload)
-    if not payload.duration_hours:
+    if not payload.duration_days:
         raise HTTPException(422, '请设置套餐有效期')
     with request.app.state.store.transaction() as db:
         credits.begin(db)

@@ -4,7 +4,7 @@ import { api, promptError } from '../api/client'
 
 export type NewcomerPromotion = {
   eligible: boolean; deadline: string; server_now: string; reserved: boolean; original_price_cents: number
-  plan: { id: string; name: string; price_cents: number; credits: number; cost: number; duration_hours: number }
+  plan: { id: string; name: string; price_cents: number; credits: number; cost: number; duration_days: number }
 }
 
 export function NewcomerOffer({ offer, serviceUrl }: { offer?: NewcomerPromotion; serviceUrl?: string | null }) {
@@ -32,9 +32,9 @@ export function NewcomerOffer({ offer, serviceUrl }: { offer?: NewcomerPromotion
   }
   const content = <>
     <Typography.Title level={3}>{plan.name} · ￥{plan.price_cents / 100}</Typography.Title>
-    <Typography.Paragraph>立即到账 {plan.credits.toLocaleString()} 积分（可做 {Math.floor(plan.credits / plan.cost)} 张图），{plan.duration_hours / 24} 天内享受 {plan.cost} 积分/张的超低折扣！</Typography.Paragraph>
+    <Typography.Paragraph>立即到账 {plan.credits.toLocaleString()} 积分（可做 {Math.floor(plan.credits / plan.cost)} 张图），{plan.duration_days} 天内享受 {plan.cost} 积分/张的超低折扣！</Typography.Paragraph>
     <Statistic title="优惠倒计时，结束后恢复原价" value={countdown} />
-    <Typography.Paragraph type="secondary">限新用户首单，终身限购 1 次。付款经客服核实开通后，积分立即到账，有效期 {plan.duration_hours} 小时，未使用的赠送积分到期作废。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">限新用户首单，终身限购 1 次。付款经客服核实开通后，积分立即到账，有效期 {plan.duration_days} 天，未使用的赠送积分到期作废。</Typography.Paragraph>
     {error && <Alert type="error" message={error} />}
     <Button type="primary" size="large" loading={busy} onClick={() => void purchase()}>立即抢购</Button>
     {contact && <div className="newcomer-contact">

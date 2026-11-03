@@ -30,6 +30,7 @@ import 'dayjs/locale/zh-cn'
 import zhCN from 'antd/es/date-picker/locale/zh_CN'
 import { Link } from 'react-router-dom'
 import { AppHeader } from '../components/AppHeader'
+import { BrandIcon } from '../components/Brand'
 import { useAuth } from '../components/AuthProvider'
 import { Chart } from '../components/Chart'
 import { api, getDashboard, promptError, type DashboardData } from '../api/client'
@@ -244,7 +245,7 @@ export function Dashboard() {
       <Layout.Content className="workspace-content dashboard-content">
         <div className="dashboard-heading">
           <div>
-            <span className="dashboard-eyebrow">创作，一目了然。</span>
+            <span className="dashboard-eyebrow dashboard-brand-welcome"><BrandIcon />青柚 · 创作，一目了然。</span>
             <Typography.Title level={2}>数据概览</Typography.Title>
             <Typography.Text type="secondary">任务按创建时间统计；积分消耗按成功结算时间统计。</Typography.Text>
           </div>
@@ -494,7 +495,7 @@ export function Dashboard() {
                   dataSource={data.recent_tasks}
                   scroll={{ x: 760 }}
                   locale={{
-                    emptyText: <Empty description="本周期暂无任务，开始你的第一次创作吧" />,
+                    emptyText: <Empty image={<BrandIcon />} description="本周期暂无任务，开始你的第一次创作吧" />,
                   }}
                   columns={[
                     {

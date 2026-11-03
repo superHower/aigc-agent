@@ -32,7 +32,7 @@ def test_upgrade_old_database_and_one_time_admin(tmp_path):
     TaskStore(path)
     assert validate(store)['ok']
     with store.transaction() as db:
-        assert [r[0] for r in db.execute('SELECT version FROM schema_migrations ORDER BY version')] == list(range(1, 16))
+        assert [r[0] for r in db.execute('SELECT version FROM schema_migrations ORDER BY version')] == list(range(1, 17))
         assert db.execute('SELECT owner_id FROM analyses').fetchone()[0] == owner
         encoded = db.execute('SELECT password_hash FROM users').fetchone()[0]
         assert verify_password('test-password-123', encoded)
